@@ -1,5 +1,5 @@
-{
-  "name": "prumo-web-client",
+﻿{
+  "name": "promo-app-web-client",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -91,3 +91,4 @@
     "vitest": "^3.2.4"
   }
 }
+
