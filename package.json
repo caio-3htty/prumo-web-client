@@ -11,10 +11,14 @@
     "build": "vite build",
     "build:embedded": "vite build --mode embedded",
     "build:dev": "vite build --mode development",
+    "browserslist:update": "npx update-browserslist-db@latest",
+    "bundle:report": "node scripts/bundle-report.mjs",
+    "bundle:check": "node scripts/check-bundle-budget.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ci:verify": "npm run lint && npm run test && npm run build && npm run bundle:report && npm run bundle:check"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -92,4 +96,3 @@
     "vitest": "^3.2.4"
   }
 }
-

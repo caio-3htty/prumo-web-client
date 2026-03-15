@@ -21,12 +21,27 @@ npm run dev
 
 ## Variaveis de ambiente
 - `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
 
 ## Build e testes
 ```bash
-npm run build
+npm run lint
 npm run test
+npm run build
+npm run bundle:report
+npm run bundle:check
+```
+
+## Performance Budget
+- Baseline inicial: `docs/performance/bundle-baseline.json`
+- Orcamento vigente: `docs/performance/bundle-budget.json`
+- Relatorio do build: `dist/bundle-report.json` e `dist/bundle-report.txt`
+
+No CI, o workflow `web-ci` falha quando o budget e excedido.
+
+Atualizacao de base do browserslist:
+```bash
+npm run browserslist:update
 ```
 
 ## Deploy (Vercel)
@@ -40,6 +55,13 @@ Secrets necessarios no GitHub:
 Fluxo:
 - Push em `main`: deploy de producao.
 - Pull Request: build de validacao (sem deploy automatico).
+
+## Checklist de release web
+1. `npm run lint`, `npm run test`, `npm run build` e `npm run bundle:check` verdes.
+2. Sem warnings criticos no build.
+3. Rotas principais carregando e rotas lazy funcionando sem regressao de guardas.
+4. Variaveis de ambiente validadas no provedor de deploy.
+5. Rollback pronto via redeploy da ultima release estavel.
 
 ## Rotas principais
 - `/obras`
