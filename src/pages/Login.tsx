@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/useAuth";
 import { useI18n } from "@/i18n/useI18n";
 import { supabase } from "@/integrations/supabase/client";
+import { getSupabaseFunctionErrorMessage } from "@/lib/supabaseFunctionError";
 
 type SignupMode = "company_owner" | "company_internal";
 type AppRole = "master" | "gestor" | "engenheiro" | "operacional" | "almoxarife";
@@ -69,22 +70,24 @@ const Login = () => {
         });
 
         if (error || !data?.ok) {
-          const message = (data?.message ?? error?.message ?? "").toLowerCase();
+          const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
+          const message = functionMessage?.toLowerCase() ?? "";
+          const normalizedMessage = message.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-          if (message.includes("empresa") && message.includes("não encontrada")) {
+          if (normalizedMessage.includes("empresa") && normalizedMessage.includes("nao encontrada")) {
             toast.error("Empresa não encontrada", {
               description: "Confira o nome da empresa ou solicite primeiro a criação da conta empresa.",
             });
-          } else if (message.includes("empresa") && message.includes("já existe")) {
+          } else if (normalizedMessage.includes("empresa") && normalizedMessage.includes("ja existe")) {
             toast.error("Empresa já cadastrada", {
               description: "Use o fluxo de conta interna para solicitar acesso.",
             });
-          } else if (message.includes("já está cadastrado") || message.includes("already")) {
+          } else if (normalizedMessage.includes("ja esta cadastrado") || normalizedMessage.includes("already")) {
             toast.error("E-mail já cadastrado", {
               description: "Use outro e-mail ou recupere a senha da conta existente.",
             });
           } else {
-            toast.error(data?.message ?? error?.message ?? "Erro ao criar solicitação.", {
+            toast.error(functionMessage ?? "Erro ao criar solicitação.", {
               description: t("createAccountError"),
             });
           }

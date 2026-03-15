@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
+import { getSupabaseFunctionErrorMessage } from "@/lib/supabaseFunctionError";
 
 type ReviewDecision = "approve" | "reject" | "edit";
 type AppRole = "master" | "gestor" | "engenheiro" | "operacional" | "almoxarife";
@@ -55,7 +56,8 @@ const AccessRequestReview = () => {
       });
 
       if (error || !data?.ok) {
-        setErrorText(data?.message ?? error?.message ?? "Não foi possível carregar a solicitação.");
+        const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
+        setErrorText(functionMessage ?? "Não foi possível carregar a solicitação.");
         setLoading(false);
         return;
       }
@@ -90,7 +92,8 @@ const AccessRequestReview = () => {
     });
 
     if (error || !data?.ok) {
-      setErrorText(data?.message ?? error?.message ?? "Falha ao processar a revisão.");
+      const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
+      setErrorText(functionMessage ?? "Falha ao processar a revisão.");
       setSubmitting(false);
       return;
     }
