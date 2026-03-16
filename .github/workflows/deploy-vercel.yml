@@ -58,6 +58,20 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
 
+      - name: Override Supabase web env for Vercel build
+        if: steps.validate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          env_file=".vercel/.env.production.local"
+          if [ ! -f "$env_file" ]; then
+            touch "$env_file"
+          fi
+          sed -i '/^VITE_SUPABASE_URL=/d' "$env_file"
+          sed -i '/^VITE_SUPABASE_PUBLISHABLE_KEY=/d' "$env_file"
+          echo "VITE_SUPABASE_URL=https://awkvzbpnihtgceqdwisc.supabase.co" >> "$env_file"
+          echo "VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_czq_XwvIyrAeg1lXbuh7pQ_XjfeonmL" >> "$env_file"
+          echo "Supabase env pinned for this build."
+
       - name: Build Vercel output
         if: steps.validate.outputs.ready == 'true'
         env:
