@@ -153,6 +153,7 @@ const Login = () => {
                     placeholder={t("fullNamePlaceholder")}
                     value={fullName}
                     onChange={(event) => setFullName(event.target.value)}
+                    autoComplete="name"
                     required
                   />
                 </div>
@@ -188,6 +189,7 @@ const Login = () => {
                   placeholder={t("corporateEmailPlaceholder")}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
                   required
                 />
               </div>
@@ -201,6 +203,7 @@ const Login = () => {
                     placeholder="Nome oficial da empresa"
                     value={companyName}
                     onChange={(event) => setCompanyName(event.target.value)}
+                    autoComplete="organization"
                     required
                   />
                 </div>
@@ -215,6 +218,7 @@ const Login = () => {
                     placeholder="Nome do usuário"
                     value={username}
                     onChange={(event) => setUsername(event.target.value)}
+                    autoComplete="nickname"
                     required
                   />
                 </div>
@@ -229,6 +233,7 @@ const Login = () => {
                     placeholder="Ex.: Comprador, Engenheiro, Almoxarife"
                     value={jobTitle}
                     onChange={(event) => setJobTitle(event.target.value)}
+                    autoComplete="organization-title"
                     required
                   />
                 </div>
@@ -270,6 +275,7 @@ const Login = () => {
                   placeholder="********"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  autoComplete={isSignUp ? "new-password" : "current-password"}
                   required
                   minLength={6}
                 />
