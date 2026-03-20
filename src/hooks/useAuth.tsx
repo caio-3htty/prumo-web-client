@@ -279,17 +279,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const can = useCallback((permissionKey: string, obraId?: string | null) => {
     if (!isActive || !tenantId) return false;
-    if (role === "master" || role === "gestor") return true;
+    if (role === "master") return true;
     return hasPermissionGrant(permissions, permissionKey, obraId);
   }, [isActive, tenantId, role, permissions]);
 
   const hasOperationalAccess =
     isActive &&
-    (!!role || permissions.length > 0) &&
     (
       role === "master" ||
-      role === "gestor" ||
       obras.length > 0 ||
+      permissions.length > 0 ||
       can("obras.view")
     );
 

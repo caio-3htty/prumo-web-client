@@ -9,8 +9,8 @@ import {
   RequireObraAccess,
   RequireObraPermission,
   RequireOperationalAccess,
-  RequirePermission,
   RequireRole,
+  RequirePermission,
 } from "@/components/auth/RouteGuards";
 import { AuthProvider } from "@/hooks/useAuth";
 import { I18nProvider } from "@/i18n/I18nProvider";
@@ -85,9 +85,7 @@ const App = () => (
                 element={(
                   <ProtectedRoute>
                     <RequirePermission permission="users.manage">
-                      <RequireRole allowed={["master", "gestor"]}>
-                        {lazyPage(<UsuariosAcessos />)}
-                      </RequireRole>
+                      {lazyPage(<UsuariosAcessos />)}
                     </RequirePermission>
                   </ProtectedRoute>
                 )}

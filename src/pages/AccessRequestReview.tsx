@@ -21,6 +21,8 @@ type RequestPayload = {
   requestedUsername: string;
   requestedJobTitle: string;
   requestedRole: AppRole;
+  requestedObraIds?: string[];
+  allowedRoles?: AppRole[];
 };
 
 const roleOptions: Array<{ value: AppRole; label: string }> = [
@@ -38,6 +40,7 @@ const AccessRequestReview = () => {
   const [errorText, setErrorText] = useState("");
   const [successText, setSuccessText] = useState("");
   const [requestData, setRequestData] = useState<RequestPayload | null>(null);
+  const [allowedRoles, setAllowedRoles] = useState<AppRole[]>([]);
   const [reviewedUsername, setReviewedUsername] = useState("");
   const [reviewedJobTitle, setReviewedJobTitle] = useState("");
   const [reviewedRole, setReviewedRole] = useState<AppRole>("operacional");
@@ -46,7 +49,7 @@ const AccessRequestReview = () => {
   useEffect(() => {
     const loadRequest = async () => {
       if (!token) {
-        setErrorText("Token de aprovação ausente.");
+        setErrorText("Token de aprovacao ausente.");
         setLoading(false);
         return;
       }
@@ -57,23 +60,44 @@ const AccessRequestReview = () => {
 
       if (error || !data?.ok) {
         const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
-        setErrorText(functionMessage ?? "Não foi possível carregar a solicitação.");
+        setErrorText(functionMessage ?? "Nao foi possivel carregar a solicitacao.");
         setLoading(false);
         return;
       }
 
-      setRequestData(data.request as RequestPayload);
-      setReviewedUsername(data.request.requestedUsername);
-      setReviewedJobTitle(data.request.requestedJobTitle);
-      setReviewedRole(data.request.requestedRole);
+      const nextRequest = data.request as RequestPayload;
+      const nextAllowedRoles = Array.isArray(nextRequest.allowedRoles)
+        ? (nextRequest.allowedRoles as AppRole[])
+        : roleOptions.map((item) => item.value);
+
+      setRequestData(nextRequest);
+      setAllowedRoles(nextAllowedRoles);
+      setReviewedUsername(nextRequest.requestedUsername);
+      setReviewedJobTitle(nextRequest.requestedJobTitle);
+      setReviewedRole(
+        nextAllowedRoles.includes(nextRequest.requestedRole)
+          ? nextRequest.requestedRole
+          : (nextAllowedRoles[0] ?? "operacional"),
+      );
       setLoading(false);
     };
 
     void loadRequest();
   }, [token]);
 
+  const visibleRoleOptions = useMemo(() => {
+    if (!allowedRoles.length) return [];
+    return roleOptions.filter((item) => allowedRoles.includes(item.value));
+  }, [allowedRoles]);
+
+  const canReview = requestData?.status === "pending" && visibleRoleOptions.length > 0;
+
   const handleReview = async (decision: ReviewDecision) => {
     if (!requestData) return;
+    if (!canReview) {
+      setErrorText("Aprovador sem permissao para revisar esta solicitacao.");
+      return;
+    }
 
     setSubmitting(true);
     setErrorText("");
@@ -93,12 +117,12 @@ const AccessRequestReview = () => {
 
     if (error || !data?.ok) {
       const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
-      setErrorText(functionMessage ?? "Falha ao processar a revisão.");
+      setErrorText(functionMessage ?? "Falha ao processar a revisao.");
       setSubmitting(false);
       return;
     }
 
-    setSuccessText(data.message ?? "Solicitação processada com sucesso.");
+    setSuccessText(data.message ?? "Solicitacao processada com sucesso.");
     setRequestData((current) =>
       current
         ? {
@@ -115,7 +139,7 @@ const AccessRequestReview = () => {
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-xl">
           <CardHeader>
-            <CardTitle>Avaliação de solicitação</CardTitle>
+            <CardTitle>Avaliacao de solicitacao</CardTitle>
           </CardHeader>
           <CardContent>Carregando...</CardContent>
         </Card>
@@ -127,9 +151,9 @@ const AccessRequestReview = () => {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-2xl">
         <CardHeader>
-          <CardTitle>Avaliação de solicitação de acesso</CardTitle>
+          <CardTitle>Avaliacao de solicitacao de acesso</CardTitle>
           <CardDescription>
-            A senha do usuário nunca é exibida neste fluxo. Aqui você pode aprovar, rejeitar ou aprovar com edição.
+            A senha do usuario nunca e exibida neste fluxo. Aqui voce pode aprovar, rejeitar ou aprovar com edicao.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -151,7 +175,7 @@ const AccessRequestReview = () => {
                   />
                 </div>
                 <div>
-                  <Label>E-mail do usuário</Label>
+                  <Label>E-mail do usuario</Label>
                   <Input value={requestData.applicantEmail} disabled />
                 </div>
                 <div>
@@ -162,7 +186,7 @@ const AccessRequestReview = () => {
 
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="reviewedUsername">Usuário (nome exibido)</Label>
+                  <Label htmlFor="reviewedUsername">Usuario (nome exibido)</Label>
                   <Input
                     id="reviewedUsername"
                     value={reviewedUsername}
@@ -187,45 +211,48 @@ const AccessRequestReview = () => {
                   id="reviewedRole"
                   value={reviewedRole}
                   onChange={(event) => setReviewedRole(event.target.value as AppRole)}
-                  disabled={submitting || requestData.status !== "pending"}
+                  disabled={submitting || requestData.status !== "pending" || visibleRoleOptions.length === 0}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
                 >
-                  {roleOptions.map((role) => (
+                  {visibleRoleOptions.map((role) => (
                     <option key={role.value} value={role.value}>
                       {role.label}
                     </option>
                   ))}
                 </select>
+                {requestData.status === "pending" && visibleRoleOptions.length === 0 && (
+                  <p className="text-xs text-destructive">Sem permissao para aprovar este perfil/escopo.</p>
+                )}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="reviewNotes">Observações</Label>
+                <Label htmlFor="reviewNotes">Observacoes</Label>
                 <Input
                   id="reviewNotes"
                   value={reviewNotes}
                   onChange={(event) => setReviewNotes(event.target.value)}
-                  placeholder="Motivo/recomendação para aprovação ou rejeição"
+                  placeholder="Motivo/recomendacao para aprovacao ou rejeicao"
                   disabled={submitting || requestData.status !== "pending"}
                 />
               </div>
 
               <div className="flex flex-wrap gap-2">
                 <Button
-                  disabled={submitting || requestData.status !== "pending"}
+                  disabled={submitting || !canReview}
                   onClick={() => void handleReview("approve")}
                 >
                   <Check className="h-4 w-4" /> Aprovar
                 </Button>
                 <Button
                   variant="outline"
-                  disabled={submitting || requestData.status !== "pending"}
+                  disabled={submitting || !canReview}
                   onClick={() => void handleReview("edit")}
                 >
-                  <PencilLine className="h-4 w-4" /> Aprovar com edição
+                  <PencilLine className="h-4 w-4" /> Aprovar com edicao
                 </Button>
                 <Button
                   variant="destructive"
-                  disabled={submitting || requestData.status !== "pending"}
+                  disabled={submitting || !canReview}
                   onClick={() => void handleReview("reject")}
                 >
                   <X className="h-4 w-4" /> Rejeitar

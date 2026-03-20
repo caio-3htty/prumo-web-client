@@ -3,7 +3,7 @@ import { ChevronLeft, LogOut } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
-import { canAccessRecebimentoRoute, canManageCadastros } from "@/lib/rbac";
+import { canAccessRecebimentoRoute } from "@/lib/rbac";
 
 type NavItem = { label: string; path: string };
 
@@ -11,31 +11,31 @@ export const PageShell = ({ title, children }: { title: string; children: React.
   const { obraId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { role, signOut } = useAuth();
+  const { role, signOut, can } = useAuth();
 
   const inObraRoute = !!obraId && location.pathname.startsWith(`/dashboard/${obraId}`);
 
   const obraNav: NavItem[] = [
     { label: "Dashboard", path: `/dashboard/${obraId}` },
     { label: "Pedidos", path: `/dashboard/${obraId}/pedidos` },
-    ...(canAccessRecebimentoRoute(role)
+    ...(canAccessRecebimentoRoute(role) && !!obraId && (can("pedidos.view", obraId) || can("pedidos.receive", obraId))
       ? [
           { label: "Recebimento", path: `/dashboard/${obraId}/recebimento` },
-          { label: "Estoque", path: `/dashboard/${obraId}/estoque` },
+          ...(can("estoque.view", obraId) ? [{ label: "Estoque", path: `/dashboard/${obraId}/estoque` }] : []),
         ]
       : []),
   ];
 
   const globalNav: NavItem[] = [
     { label: "Obras", path: "/obras" },
-    ...(canManageCadastros(role)
+    ...(can("fornecedores.view") || can("materiais.view") || can("material_fornecedor.view")
       ? [
-          { label: "Fornecedores", path: "/cadastros/fornecedores" },
-          { label: "Materiais", path: "/cadastros/materiais" },
-          { label: "Material x Fornecedor", path: "/cadastros/material-fornecedor" },
+          ...(can("fornecedores.view") ? [{ label: "Fornecedores", path: "/cadastros/fornecedores" }] : []),
+          ...(can("materiais.view") ? [{ label: "Materiais", path: "/cadastros/materiais" }] : []),
+          ...(can("material_fornecedor.view") ? [{ label: "Material x Fornecedor", path: "/cadastros/material-fornecedor" }] : []),
         ]
       : []),
-    ...(role === "master" ? [{ label: "Usuarios e Acessos", path: "/usuarios-acessos" }] : []),
+    ...(can("users.manage") ? [{ label: "Usuarios e Acessos", path: "/usuarios-acessos" }] : []),
   ];
 
   const navItems = inObraRoute ? obraNav : globalNav;

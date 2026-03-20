@@ -30,6 +30,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth, type AppRole } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { roleLabelMap } from "@/lib/rbac";
+import { getSupabaseFunctionErrorMessage } from "@/lib/supabaseFunctionError";
 
 type CompanyUserType = {
   id: string;
@@ -71,11 +72,29 @@ type TypeForm = {
   is_active: boolean;
 };
 
+type ProvisionForm = {
+  full_name: string;
+  email: string;
+  job_title: string;
+  role: AppRole;
+  obra_ids: string[];
+  temp_password: string;
+};
+
 const defaultTypeForm: TypeForm = {
   name: "",
   description: "",
   base_role: "operacional",
   is_active: true,
+};
+
+const defaultProvisionForm: ProvisionForm = {
+  full_name: "",
+  email: "",
+  job_title: "",
+  role: "operacional",
+  obra_ids: [],
+  temp_password: "",
 };
 
 const baseRoleOptions: Array<{ value: AppRole; label: string }> = [
@@ -88,7 +107,7 @@ const baseRoleOptions: Array<{ value: AppRole; label: string }> = [
 
 const UsuariosAcessos = () => {
   const queryClient = useQueryClient();
-  const { user, refreshAccess } = useAuth();
+  const { user, role, tenantId, refreshAccess } = useAuth();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabaseAny = supabase as any;
 
@@ -96,6 +115,8 @@ const UsuariosAcessos = () => {
   const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [editingType, setEditingType] = useState<CompanyUserType | null>(null);
   const [typeForm, setTypeForm] = useState<TypeForm>(defaultTypeForm);
+  const [provisionDialogOpen, setProvisionDialogOpen] = useState(false);
+  const [provisionForm, setProvisionForm] = useState<ProvisionForm>(defaultProvisionForm);
 
   const { data: profiles = [], isLoading: loadingProfiles } = useQuery({
     queryKey: ["admin-users-profiles"],
@@ -253,6 +274,11 @@ const UsuariosAcessos = () => {
     }, {});
   }, [assignments]);
 
+  const actorObraIds = useMemo(
+    () => (user?.id ? (obraIdsByUserId[user.id] ?? []) : []),
+    [obraIdsByUserId, user?.id],
+  );
+
   const grantsByUserId = useMemo(() => {
     return permissionGrants.reduce<
       Record<
@@ -308,6 +334,36 @@ const UsuariosAcessos = () => {
     [obras.length, activeUsersCount],
   );
 
+  const availableProvisionRoles = useMemo(() => {
+    if (role === "master") {
+      return baseRoleOptions;
+    }
+    if (role === "gestor") {
+      return baseRoleOptions.filter((item) => item.value !== "master");
+    }
+    if (role === "engenheiro") {
+      return baseRoleOptions.filter((item) => item.value === "operacional" || item.value === "almoxarife");
+    }
+    return [];
+  }, [role]);
+
+  const availableTypeBaseRoles = useMemo(() => {
+    if (role === "master") return baseRoleOptions;
+    if (role === "gestor") return baseRoleOptions.filter((item) => item.value !== "master");
+    if (role === "engenheiro") {
+      return baseRoleOptions.filter((item) => item.value === "operacional" || item.value === "almoxarife");
+    }
+    return [];
+  }, [role]);
+
+  const provisionableObras = useMemo(() => {
+    if (role === "engenheiro") {
+      const obraSet = new Set(actorObraIds);
+      return obras.filter((obra) => obraSet.has(obra.id));
+    }
+    return obras;
+  }, [actorObraIds, obras, role]);
+
   const updateDraft = (userId: string, updater: (current: EditableUser) => EditableUser) => {
     setDrafts((current) => {
       const base = current[userId] ?? users.find((row) => row.user_id === userId);
@@ -362,6 +418,9 @@ const UsuariosAcessos = () => {
 
       const selectedType = payload.user_type_id ? typeById[payload.user_type_id] : null;
       const roleToPersist: AppRole | null = selectedType?.base_role ?? payload.role ?? null;
+      if (roleToPersist && !availableTypeBaseRoles.some((item) => item.value === roleToPersist)) {
+        throw new Error("Papel de acesso nao permitido para seu nivel.");
+      }
 
       if (roleToPersist) {
         const { error: roleError } = await supabase
@@ -499,9 +558,58 @@ const UsuariosAcessos = () => {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const provisionUser = useMutation({
+    mutationFn: async (payload: ProvisionForm) => {
+      if (!tenantId) {
+        throw new Error("Tenant nao identificado para provisionamento.");
+      }
+
+      const normalizedRole = payload.role;
+      if (!availableProvisionRoles.some((item) => item.value === normalizedRole)) {
+        throw new Error("Perfil nao permitido para seu nivel de aprovacao.");
+      }
+
+      const body = {
+        tenant_id: tenantId,
+        email: payload.email.trim().toLowerCase(),
+        full_name: payload.full_name.trim(),
+        job_title: payload.job_title.trim(),
+        role: normalizedRole,
+        obra_ids: payload.obra_ids,
+        temp_password: payload.temp_password,
+      };
+
+      const { data, error } = await supabase.functions.invoke("admin-user-provision", { body });
+      if (error || !data?.ok) {
+        const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
+        throw new Error(functionMessage ?? data?.message ?? "Falha ao provisionar usuario.");
+      }
+
+      return data as { user_id: string; email: string };
+    },
+    onSuccess: async () => {
+      toast.success("Usuario provisionado com senha temporaria.");
+      setProvisionDialogOpen(false);
+      setProvisionForm({
+        ...defaultProvisionForm,
+        role: availableProvisionRoles[0]?.value ?? "operacional",
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-users-profiles"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-users-roles"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-users-assignments"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-audit-log"] }),
+      ]);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const openCreateType = () => {
     setEditingType(null);
-    setTypeForm(defaultTypeForm);
+    setTypeForm({
+      ...defaultTypeForm,
+      base_role: availableTypeBaseRoles[0]?.value ?? "operacional",
+    });
     setTypeDialogOpen(true);
   };
 
@@ -521,11 +629,41 @@ const UsuariosAcessos = () => {
       toast.error("Nome do tipo e obrigatorio");
       return;
     }
+    if (!availableTypeBaseRoles.some((item) => item.value === typeForm.base_role)) {
+      toast.error("Papel base nao permitido para seu nivel de acesso.");
+      return;
+    }
 
     upsertUserType.mutate({
       ...typeForm,
       ...(editingType ? { id: editingType.id } : {}),
     });
+  };
+
+  const openProvisionDialog = () => {
+    if (!availableProvisionRoles.length) {
+      toast.error("Seu perfil nao permite provisionar usuarios.");
+      return;
+    }
+
+    setProvisionForm({
+      ...defaultProvisionForm,
+      role: availableProvisionRoles[0].value,
+    });
+    setProvisionDialogOpen(true);
+  };
+
+  const saveProvision = () => {
+    if (!provisionForm.full_name.trim() || !provisionForm.email.trim() || !provisionForm.job_title.trim()) {
+      toast.error("Nome, e-mail e cargo sao obrigatorios.");
+      return;
+    }
+    if (provisionForm.temp_password.length < 6) {
+      toast.error("Senha temporaria deve ter ao menos 6 caracteres.");
+      return;
+    }
+
+    provisionUser.mutate(provisionForm);
   };
 
   return (
@@ -537,7 +675,15 @@ const UsuariosAcessos = () => {
             Usuario master gerencia usuarios, tipos da empresa e vinculos de obra.
           </p>
         </div>
-        <Badge variant="secondary">{users.length} usuarios</Badge>
+        <div className="flex items-center gap-2">
+          {availableProvisionRoles.length > 0 && (
+            <Button onClick={openProvisionDialog}>
+              <Plus className="mr-1 h-4 w-4" />
+              Novo usuario
+            </Button>
+          )}
+          <Badge variant="secondary">{users.length} usuarios</Badge>
+        </div>
       </div>
 
       <Tabs defaultValue="usuarios" className="space-y-6">
@@ -551,8 +697,8 @@ const UsuariosAcessos = () => {
             <Alert>
               <AlertTitle>Template recomendado para empresa menor</AlertTitle>
               <AlertDescription>
-                Detectamos até 2 obras ativas ou até 15 usuários ativos. O fluxo recomendado é usar templates prontos e
-                ajustar somente exceções.
+                Detectamos ate 2 obras ativas ou ate 15 usuarios ativos. O fluxo recomendado e usar templates prontos e
+                ajustar somente excecoes.
               </AlertDescription>
             </Alert>
           )}
@@ -679,7 +825,7 @@ const UsuariosAcessos = () => {
 
                     {row.access_mode === "custom" && (
                       <div className="space-y-3 rounded-md border border-border p-3">
-                        <Label>Permissões personalizadas</Label>
+                        <Label>Permissoes personalizadas</Label>
                         <div className="space-y-3">
                           {permissionCatalog.map((permission) => {
                             const grant = grantsByKey[permission.key];
@@ -888,6 +1034,7 @@ const UsuariosAcessos = () => {
               <Label>Papel base *</Label>
               <Select
                 value={typeForm.base_role}
+                disabled={availableTypeBaseRoles.length === 0}
                 onValueChange={(value) =>
                   setTypeForm((current) => ({ ...current, base_role: value as AppRole }))
                 }
@@ -896,13 +1043,18 @@ const UsuariosAcessos = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {baseRoleOptions.map((option) => (
+                  {availableTypeBaseRoles.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {availableTypeBaseRoles.length === 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Seu perfil nao permite criar tipos de usuario com papel base.
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Switch
@@ -918,6 +1070,122 @@ const UsuariosAcessos = () => {
             </Button>
             <Button onClick={saveType} disabled={upsertUserType.isPending}>
               Salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={provisionDialogOpen} onOpenChange={setProvisionDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Novo usuario (provisionamento administrativo)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Nome completo *</Label>
+              <Input
+                value={provisionForm.full_name}
+                onChange={(event) =>
+                  setProvisionForm((current) => ({ ...current, full_name: event.target.value }))
+                }
+                placeholder="Nome completo"
+              />
+            </div>
+            <div>
+              <Label>E-mail *</Label>
+              <Input
+                type="email"
+                value={provisionForm.email}
+                onChange={(event) =>
+                  setProvisionForm((current) => ({ ...current, email: event.target.value }))
+                }
+                placeholder="usuario@empresa.com"
+              />
+            </div>
+            <div>
+              <Label>Cargo *</Label>
+              <Input
+                value={provisionForm.job_title}
+                onChange={(event) =>
+                  setProvisionForm((current) => ({ ...current, job_title: event.target.value }))
+                }
+                placeholder="Ex.: Engenheiro de obra"
+              />
+            </div>
+            <div>
+              <Label>Perfil de acesso *</Label>
+              <Select
+                value={provisionForm.role}
+                onValueChange={(value) =>
+                  setProvisionForm((current) => ({ ...current, role: value as AppRole }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableProvisionRoles.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Obras vinculadas</Label>
+              <div className="mt-2 grid max-h-40 gap-2 overflow-y-auto rounded-md border border-border p-2 sm:grid-cols-2">
+                {provisionableObras.map((obra) => {
+                  const selected = provisionForm.obra_ids.includes(obra.id);
+                  return (
+                    <label
+                      key={`provision-obra-${obra.id}`}
+                      className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2"
+                    >
+                      <Checkbox
+                        checked={selected}
+                        onCheckedChange={(nextChecked) =>
+                          setProvisionForm((current) => {
+                            const obraSet = new Set(current.obra_ids);
+                            if (nextChecked) obraSet.add(obra.id);
+                            else obraSet.delete(obra.id);
+                            return { ...current, obra_ids: Array.from(obraSet) };
+                          })
+                        }
+                      />
+                      <span className="text-sm">{obra.name}</span>
+                    </label>
+                  );
+                })}
+                {provisionableObras.length === 0 && (
+                  <p className="text-xs text-muted-foreground">Nenhuma obra disponivel para vinculo.</p>
+                )}
+              </div>
+              {role === "engenheiro" && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Como engenheiro, voce so pode provisionar usuarios nas obras em que ja esta vinculado.
+                </p>
+              )}
+            </div>
+            <div>
+              <Label>Senha temporaria *</Label>
+              <Input
+                type="password"
+                minLength={6}
+                value={provisionForm.temp_password}
+                onChange={(event) =>
+                  setProvisionForm((current) => ({ ...current, temp_password: event.target.value }))
+                }
+                placeholder="Minimo 6 caracteres"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProvisionDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={saveProvision} disabled={provisionUser.isPending}>
+              Criar usuario
             </Button>
           </DialogFooter>
         </DialogContent>

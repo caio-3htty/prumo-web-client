@@ -16,6 +16,7 @@ import { getSupabaseFunctionErrorMessage } from "@/lib/supabaseFunctionError";
 
 type SignupMode = "company_owner" | "company_internal";
 type AppRole = "master" | "gestor" | "engenheiro" | "operacional" | "almoxarife";
+type CompanySuggestion = { id: string; name: string; slug: string | null };
 
 const roleOptions: Array<{ value: AppRole; label: string }> = [
   { value: "master", label: "Master" },
@@ -34,6 +35,9 @@ const Login = () => {
   const [fullName, setFullName] = useState("");
   const [signupMode, setSignupMode] = useState<SignupMode>("company_owner");
   const [companyName, setCompanyName] = useState("");
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [companySuggestions, setCompanySuggestions] = useState<CompanySuggestion[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
   const [username, setUsername] = useState("");
   const [jobTitle, setJobTitle] = useState("");
   const [requestedRole, setRequestedRole] = useState<AppRole>("operacional");
@@ -46,12 +50,52 @@ const Login = () => {
     }
   }, [authLoading, navigate, user]);
 
+  useEffect(() => {
+    if (signupMode === "company_owner" || !isSignUp) {
+      setTenantId(null);
+      setCompanySuggestions([]);
+      setLoadingCompanies(false);
+      return;
+    }
+
+    const query = companyName.trim();
+    if (query.length < 3) {
+      setCompanySuggestions([]);
+      setLoadingCompanies(false);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      setLoadingCompanies(true);
+      const { data, error } = await supabase.functions.invoke("account-access-request", {
+        body: { action: "search_companies", query },
+      });
+
+      if (error || !data?.ok) {
+        setCompanySuggestions([]);
+      } else {
+        const companies = Array.isArray(data.companies) ? (data.companies as CompanySuggestion[]) : [];
+        setCompanySuggestions(companies);
+      }
+      setLoadingCompanies(false);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [companyName, isSignUp, signupMode]);
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
 
     try {
       if (isSignUp) {
+        if (signupMode === "company_internal" && !tenantId) {
+          toast.error("Selecione uma empresa valida", {
+            description: "Escolha a empresa sugerida para continuar com a solicitacao interna.",
+          });
+          return;
+        }
+
         const action = signupMode === "company_owner" ? "register_company" : "register_internal";
         const payload = {
           action,
@@ -60,6 +104,7 @@ const Login = () => {
           fullName: fullName.trim(),
           username: (username.trim() || fullName.trim()),
           companyName: companyName.trim(),
+          tenantId: signupMode === "company_internal" ? tenantId : null,
           jobTitle: jobTitle.trim(),
           requestedRole: signupMode === "company_owner" ? "master" : requestedRole,
           origin: window.location.origin,
@@ -202,10 +247,52 @@ const Login = () => {
                     type="text"
                     placeholder="Nome oficial da empresa"
                     value={companyName}
-                    onChange={(event) => setCompanyName(event.target.value)}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setCompanyName(next);
+                      if (signupMode === "company_internal") {
+                        setTenantId(null);
+                      }
+                    }}
                     autoComplete="organization"
                     required
                   />
+                  {signupMode === "company_internal" && (
+                    <div className="space-y-2">
+                      {loadingCompanies && (
+                        <p className="text-xs text-muted-foreground">Buscando empresas...</p>
+                      )}
+                      {!loadingCompanies && companySuggestions.length > 0 && (
+                        <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-card">
+                          {companySuggestions.map((company) => (
+                            <button
+                              key={company.id}
+                              type="button"
+                              className="block w-full border-b border-border px-3 py-2 text-left text-sm last:border-b-0 hover:bg-accent"
+                              onClick={() => {
+                                setCompanyName(company.name);
+                                setTenantId(company.id);
+                                setCompanySuggestions([]);
+                              }}
+                            >
+                              <span className="font-medium">{company.name}</span>
+                              {company.slug ? <span className="ml-2 text-xs text-muted-foreground">({company.slug})</span> : null}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {!loadingCompanies && companyName.trim().length >= 3 && companySuggestions.length === 0 && !tenantId && (
+                        <p className="text-xs text-destructive">
+                          Nenhuma empresa valida encontrada. Ajuste o nome e selecione na lista.
+                        </p>
+                      )}
+                      {tenantId && (
+                        <p className="text-xs text-emerald-600">
+                          Empresa validada para envio da solicitacao.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
