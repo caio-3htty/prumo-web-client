@@ -31,6 +31,12 @@ import { useAuth, type AppRole } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { roleLabelMap } from "@/lib/rbac";
 import { getSupabaseFunctionErrorMessage } from "@/lib/supabaseFunctionError";
+import {
+  hasValidationErrors,
+  normalizePhone,
+  sanitizeUserFieldInput,
+  validateProvisionInput,
+} from "@/lib/userInputValidation";
 
 type CompanyUserType = {
   id: string;
@@ -76,6 +82,7 @@ type ProvisionForm = {
   full_name: string;
   email: string;
   job_title: string;
+  phone: string;
   role: AppRole;
   obra_ids: string[];
   temp_password: string;
@@ -92,6 +99,7 @@ const defaultProvisionForm: ProvisionForm = {
   full_name: "",
   email: "",
   job_title: "",
+  phone: "",
   role: "operacional",
   obra_ids: [],
   temp_password: "",
@@ -117,6 +125,15 @@ const UsuariosAcessos = () => {
   const [typeForm, setTypeForm] = useState<TypeForm>(defaultTypeForm);
   const [provisionDialogOpen, setProvisionDialogOpen] = useState(false);
   const [provisionForm, setProvisionForm] = useState<ProvisionForm>(defaultProvisionForm);
+  const [attemptedProvisionSubmit, setAttemptedProvisionSubmit] = useState(false);
+  const provisionErrors = validateProvisionInput({
+    fullName: provisionForm.full_name,
+    email: provisionForm.email,
+    jobTitle: provisionForm.job_title,
+    phone: provisionForm.phone,
+    password: provisionForm.temp_password,
+  });
+  const hasProvisionErrors = hasValidationErrors(provisionErrors);
 
   const { data: profiles = [], isLoading: loadingProfiles } = useQuery({
     queryKey: ["admin-users-profiles"],
@@ -574,6 +591,7 @@ const UsuariosAcessos = () => {
         email: payload.email.trim().toLowerCase(),
         full_name: payload.full_name.trim(),
         job_title: payload.job_title.trim(),
+        phone: normalizePhone(payload.phone) || null,
         role: normalizedRole,
         obra_ids: payload.obra_ids,
         temp_password: payload.temp_password,
@@ -582,6 +600,9 @@ const UsuariosAcessos = () => {
       const { data, error } = await supabase.functions.invoke("admin-user-provision", { body });
       if (error || !data?.ok) {
         const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
+        if (String(data?.code ?? "").toLowerCase().includes("phone")) {
+          throw new Error("Telefone invalido. Informe apenas numeros entre 10 e 13 digitos.");
+        }
         throw new Error(functionMessage ?? data?.message ?? "Falha ao provisionar usuario.");
       }
 
@@ -594,6 +615,7 @@ const UsuariosAcessos = () => {
         ...defaultProvisionForm,
         role: availableProvisionRoles[0]?.value ?? "operacional",
       });
+      setAttemptedProvisionSubmit(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin-users-profiles"] }),
         queryClient.invalidateQueries({ queryKey: ["admin-users-roles"] }),
@@ -650,16 +672,21 @@ const UsuariosAcessos = () => {
       ...defaultProvisionForm,
       role: availableProvisionRoles[0].value,
     });
+    setAttemptedProvisionSubmit(false);
     setProvisionDialogOpen(true);
   };
 
   const saveProvision = () => {
-    if (!provisionForm.full_name.trim() || !provisionForm.email.trim() || !provisionForm.job_title.trim()) {
-      toast.error("Nome, e-mail e cargo sao obrigatorios.");
-      return;
-    }
-    if (provisionForm.temp_password.length < 6) {
-      toast.error("Senha temporaria deve ter ao menos 6 caracteres.");
+    setAttemptedProvisionSubmit(true);
+    if (hasProvisionErrors) {
+      const firstError =
+        provisionErrors.fullName ||
+        provisionErrors.email ||
+        provisionErrors.jobTitle ||
+        provisionErrors.phone ||
+        provisionErrors.password ||
+        "Revise os campos obrigatorios.";
+      toast.error(firstError);
       return;
     }
 
@@ -1075,7 +1102,13 @@ const UsuariosAcessos = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={provisionDialogOpen} onOpenChange={setProvisionDialogOpen}>
+      <Dialog
+        open={provisionDialogOpen}
+        onOpenChange={(nextOpen) => {
+          setProvisionDialogOpen(nextOpen);
+          if (!nextOpen) setAttemptedProvisionSubmit(false);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Novo usuario (provisionamento administrativo)</DialogTitle>
@@ -1086,10 +1119,17 @@ const UsuariosAcessos = () => {
               <Input
                 value={provisionForm.full_name}
                 onChange={(event) =>
-                  setProvisionForm((current) => ({ ...current, full_name: event.target.value }))
+                  setProvisionForm((current) => ({
+                    ...current,
+                    full_name: sanitizeUserFieldInput("fullName", event.target.value),
+                  }))
                 }
                 placeholder="Nome completo"
+                maxLength={120}
               />
+              {(attemptedProvisionSubmit || provisionForm.full_name.trim().length > 0) && provisionErrors.fullName && (
+                <p className="mt-1 text-xs text-destructive">{provisionErrors.fullName}</p>
+              )}
             </div>
             <div>
               <Label>E-mail *</Label>
@@ -1097,20 +1137,54 @@ const UsuariosAcessos = () => {
                 type="email"
                 value={provisionForm.email}
                 onChange={(event) =>
-                  setProvisionForm((current) => ({ ...current, email: event.target.value }))
+                  setProvisionForm((current) => ({
+                    ...current,
+                    email: sanitizeUserFieldInput("email", event.target.value),
+                  }))
                 }
                 placeholder="usuario@empresa.com"
+                maxLength={254}
               />
+              {(attemptedProvisionSubmit || provisionForm.email.trim().length > 0) && provisionErrors.email && (
+                <p className="mt-1 text-xs text-destructive">{provisionErrors.email}</p>
+              )}
             </div>
             <div>
               <Label>Cargo *</Label>
               <Input
                 value={provisionForm.job_title}
                 onChange={(event) =>
-                  setProvisionForm((current) => ({ ...current, job_title: event.target.value }))
+                  setProvisionForm((current) => ({
+                    ...current,
+                    job_title: sanitizeUserFieldInput("jobTitle", event.target.value),
+                  }))
                 }
                 placeholder="Ex.: Engenheiro de obra"
+                maxLength={80}
               />
+              {(attemptedProvisionSubmit || provisionForm.job_title.trim().length > 0) && provisionErrors.jobTitle && (
+                <p className="mt-1 text-xs text-destructive">{provisionErrors.jobTitle}</p>
+              )}
+            </div>
+            <div>
+              <Label>Telefone (opcional)</Label>
+              <Input
+                type="tel"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={provisionForm.phone}
+                onChange={(event) =>
+                  setProvisionForm((current) => ({
+                    ...current,
+                    phone: sanitizeUserFieldInput("phone", event.target.value),
+                  }))
+                }
+                placeholder="Somente numeros (10 a 13)"
+                maxLength={13}
+              />
+              {(attemptedProvisionSubmit || provisionForm.phone.length > 0) && provisionErrors.phone && (
+                <p className="mt-1 text-xs text-destructive">{provisionErrors.phone}</p>
+              )}
             </div>
             <div>
               <Label>Perfil de acesso *</Label>
@@ -1178,13 +1252,16 @@ const UsuariosAcessos = () => {
                 }
                 placeholder="Minimo 6 caracteres"
               />
+              {(attemptedProvisionSubmit || provisionForm.temp_password.length > 0) && provisionErrors.password && (
+                <p className="mt-1 text-xs text-destructive">{provisionErrors.password}</p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setProvisionDialogOpen(false)}>
               Cancelar
             </Button>
-            <Button onClick={saveProvision} disabled={provisionUser.isPending}>
+            <Button onClick={saveProvision} disabled={provisionUser.isPending || hasProvisionErrors}>
               Criar usuario
             </Button>
           </DialogFooter>

@@ -111,6 +111,7 @@ const AccessRequestReview = () => {
         reviewedUsername,
         reviewedJobTitle,
         reviewedRole,
+        reviewedObraIds: requestData.requestedObraIds ?? [],
         reviewNotes,
       },
     });

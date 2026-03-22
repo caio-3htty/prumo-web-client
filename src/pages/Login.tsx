@@ -13,8 +13,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { useI18n } from "@/i18n/useI18n";
 import { supabase } from "@/integrations/supabase/client";
 import { getSupabaseFunctionErrorMessage } from "@/lib/supabaseFunctionError";
+import {
+  hasValidationErrors,
+  normalizePhone,
+  sanitizeUserFieldInput,
+  type SignupMode,
+  validateSignupInput,
+} from "@/lib/userInputValidation";
 
-type SignupMode = "company_owner" | "company_internal";
 type AppRole = "master" | "gestor" | "engenheiro" | "operacional" | "almoxarife";
 type CompanySuggestion = { id: string; name: string; slug: string | null };
 
@@ -40,9 +46,26 @@ const Login = () => {
   const [loadingCompanies, setLoadingCompanies] = useState(false);
   const [username, setUsername] = useState("");
   const [jobTitle, setJobTitle] = useState("");
+  const [phone, setPhone] = useState("");
   const [requestedRole, setRequestedRole] = useState<AppRole>("operacional");
+  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
   const [loading, setLoading] = useState(false);
   const { t } = useI18n();
+
+  const signupErrors = isSignUp
+    ? validateSignupInput({
+        fullName,
+        companyName,
+        username,
+        jobTitle,
+        email,
+        phone,
+        password,
+        signupMode,
+        tenantId,
+      })
+    : {};
+  const hasSignupErrors = isSignUp && hasValidationErrors(signupErrors);
 
   useEffect(() => {
     if (!authLoading && user) {
@@ -85,17 +108,18 @@ const Login = () => {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setLoading(true);
 
     try {
       if (isSignUp) {
-        if (signupMode === "company_internal" && !tenantId) {
-          toast.error("Selecione uma empresa valida", {
-            description: "Escolha a empresa sugerida para continuar com a solicitacao interna.",
+        setAttemptedSubmit(true);
+        if (hasSignupErrors) {
+          toast.error("Revise os campos do cadastro", {
+            description: "Corrija os campos destacados antes de enviar.",
           });
           return;
         }
 
+        setLoading(true);
         const action = signupMode === "company_owner" ? "register_company" : "register_internal";
         const payload = {
           action,
@@ -106,6 +130,7 @@ const Login = () => {
           companyName: companyName.trim(),
           tenantId: signupMode === "company_internal" ? tenantId : null,
           jobTitle: jobTitle.trim(),
+          phone: normalizePhone(phone) || null,
           requestedRole: signupMode === "company_owner" ? "master" : requestedRole,
           origin: window.location.origin,
         };
@@ -116,10 +141,25 @@ const Login = () => {
 
         if (error || !data?.ok) {
           const functionMessage = await getSupabaseFunctionErrorMessage(error, data);
+          const errorCode = String(data?.code ?? "").toLowerCase();
           const message = functionMessage?.toLowerCase() ?? "";
           const normalizedMessage = message.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-          if (normalizedMessage.includes("empresa") && normalizedMessage.includes("nao encontrada")) {
+          if (
+            errorCode.includes("invalid_phone_format") ||
+            errorCode.includes("phone_length_invalid")
+          ) {
+            toast.error("Telefone invalido", {
+              description: "Informe apenas numeros, entre 10 e 13 digitos.",
+            });
+          } else if (
+            errorCode.includes("invalid_email_format") ||
+            errorCode.includes("email_length_invalid")
+          ) {
+            toast.error("E-mail invalido", {
+              description: "Revise o formato do e-mail informado.",
+            });
+          } else if (normalizedMessage.includes("empresa") && normalizedMessage.includes("nao encontrada")) {
             toast.error("Empresa nao encontrada", {
               description: "Confira o nome da empresa ou solicite primeiro a criacao da conta empresa.",
             });
@@ -141,14 +181,17 @@ const Login = () => {
             toast.success("Conta empresa criada", {
               description: "A conta master foi criada com sucesso. Faca login para continuar.",
             });
+            setAttemptedSubmit(false);
           } else {
             toast.success("Solicitacao enviada", {
               description:
                 "A empresa recebeu um e-mail para aprovar, rejeitar ou editar seu usuario e cargo. A senha nao e compartilhada.",
             });
+            setAttemptedSubmit(false);
           }
         }
       } else {
+        setLoading(true);
         const { error } = await supabase.auth.signInWithPassword({ email, password });
 
         if (error) {
@@ -197,10 +240,14 @@ const Login = () => {
                     type="text"
                     placeholder={t("fullNamePlaceholder")}
                     value={fullName}
-                    onChange={(event) => setFullName(event.target.value)}
+                    onChange={(event) => setFullName(sanitizeUserFieldInput("fullName", event.target.value))}
                     autoComplete="name"
+                    maxLength={120}
                     required
                   />
+                  {(attemptedSubmit || fullName.trim().length > 0) && signupErrors.fullName && (
+                    <p className="text-xs text-destructive">{signupErrors.fullName}</p>
+                  )}
                 </div>
               )}
 
@@ -211,14 +258,20 @@ const Login = () => {
                     <Button
                       type="button"
                       variant={signupMode === "company_owner" ? "default" : "outline"}
-                      onClick={() => setSignupMode("company_owner")}
+                      onClick={() => {
+                        setSignupMode("company_owner");
+                        setAttemptedSubmit(false);
+                      }}
                     >
                       Conta empresa
                     </Button>
                     <Button
                       type="button"
                       variant={signupMode === "company_internal" ? "default" : "outline"}
-                      onClick={() => setSignupMode("company_internal")}
+                      onClick={() => {
+                        setSignupMode("company_internal");
+                        setAttemptedSubmit(false);
+                      }}
                     >
                       Conta interna
                     </Button>
@@ -233,10 +286,14 @@ const Login = () => {
                   type="email"
                   placeholder={t("corporateEmailPlaceholder")}
                   value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                  onChange={(event) => setEmail(sanitizeUserFieldInput("email", event.target.value))}
                   autoComplete="email"
+                  maxLength={254}
                   required
                 />
+                {(attemptedSubmit || email.trim().length > 0) && signupErrors.email && (
+                  <p className="text-xs text-destructive">{signupErrors.email}</p>
+                )}
               </div>
 
               {isSignUp && (
@@ -248,15 +305,19 @@ const Login = () => {
                     placeholder="Nome oficial da empresa"
                     value={companyName}
                     onChange={(event) => {
-                      const next = event.target.value;
+                      const next = sanitizeUserFieldInput("companyName", event.target.value);
                       setCompanyName(next);
                       if (signupMode === "company_internal") {
                         setTenantId(null);
                       }
                     }}
                     autoComplete="organization"
+                    maxLength={120}
                     required
                   />
+                  {(attemptedSubmit || companyName.trim().length > 0) && signupErrors.companyName && (
+                    <p className="text-xs text-destructive">{signupErrors.companyName}</p>
+                  )}
                   {signupMode === "company_internal" && (
                     <div className="space-y-2">
                       {loadingCompanies && (
@@ -291,6 +352,9 @@ const Login = () => {
                           Empresa validada para envio da solicitacao.
                         </p>
                       )}
+                      {attemptedSubmit && signupErrors.tenantId && (
+                        <p className="text-xs text-destructive">{signupErrors.tenantId}</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -304,10 +368,14 @@ const Login = () => {
                     type="text"
                     placeholder="Nome do usuario"
                     value={username}
-                    onChange={(event) => setUsername(event.target.value)}
+                    onChange={(event) => setUsername(sanitizeUserFieldInput("username", event.target.value))}
                     autoComplete="nickname"
+                    maxLength={50}
                     required
                   />
+                  {(attemptedSubmit || username.trim().length > 0) && signupErrors.username && (
+                    <p className="text-xs text-destructive">{signupErrors.username}</p>
+                  )}
                 </div>
               )}
 
@@ -319,10 +387,34 @@ const Login = () => {
                     type="text"
                     placeholder="Ex.: Comprador, Engenheiro, Almoxarife"
                     value={jobTitle}
-                    onChange={(event) => setJobTitle(event.target.value)}
+                    onChange={(event) => setJobTitle(sanitizeUserFieldInput("jobTitle", event.target.value))}
                     autoComplete="organization-title"
+                    maxLength={80}
                     required
                   />
+                  {(attemptedSubmit || jobTitle.trim().length > 0) && signupErrors.jobTitle && (
+                    <p className="text-xs text-destructive">{signupErrors.jobTitle}</p>
+                  )}
+                </div>
+              )}
+
+              {isSignUp && (
+                <div className="space-y-2">
+                  <Label htmlFor="phone">Telefone (opcional)</Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="Somente numeros (10 a 13)"
+                    value={phone}
+                    onChange={(event) => setPhone(sanitizeUserFieldInput("phone", event.target.value))}
+                    maxLength={13}
+                    autoComplete="tel"
+                  />
+                  {(attemptedSubmit || phone.length > 0) && signupErrors.phone && (
+                    <p className="text-xs text-destructive">{signupErrors.phone}</p>
+                  )}
                 </div>
               )}
 
@@ -368,7 +460,7 @@ const Login = () => {
                 />
               </div>
 
-              <Button type="submit" className="w-full" disabled={loading}>
+              <Button type="submit" className="w-full" disabled={loading || hasSignupErrors}>
                 {loading ? (
                   <span className="flex items-center gap-2">
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
@@ -389,7 +481,10 @@ const Login = () => {
             <div className="mt-4 text-center">
               <button
                 type="button"
-                onClick={() => setIsSignUp((current) => !current)}
+                onClick={() => {
+                  setIsSignUp((current) => !current);
+                  setAttemptedSubmit(false);
+                }}
                 className="text-sm text-muted-foreground transition-colors hover:text-primary"
               >
                 {isSignUp ? t("hasAccount") : t("noAccount")}
