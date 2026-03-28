@@ -152,6 +152,11 @@ const Login = () => {
             toast.error("Telefone invalido", {
               description: "Informe apenas numeros, entre 10 e 13 digitos.",
             });
+          } else if (errorCode.includes("email_delivery_failed")) {
+            toast.error("Cadastro nao concluido", {
+              description:
+                "O e-mail de boas-vindas nao foi enviado. Tente novamente em instantes.",
+            });
           } else if (
             errorCode.includes("invalid_email_format") ||
             errorCode.includes("email_length_invalid")
