@@ -4,7 +4,7 @@ import path from "node:path";
 const IGNORED_INVALID_FILES = new Set(["tsconfig.app.json", "tsconfig.node.json"]);
 
 function runDepcheck() {
-  const cmd = "npx depcheck --json --ignores=autoprefixer,postcss";
+  const cmd = "npx depcheck --json --ignores=autoprefixer,postcss,eslint,jsdom,typescript";
   return spawnSync(cmd, {
     cwd: process.cwd(),
     shell: true,

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "clean": "node scripts/clean.mjs",
     "build": "vite build",
     "build:embedded": "vite build --mode embedded",
     "build:dev": "vite build --mode development",

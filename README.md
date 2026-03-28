@@ -34,9 +34,15 @@ npm run bundle:check
 
 ## Code Hygiene
 ```bash
+npm run clean
 npm run cleanup:analyze
 npm run cleanup:verify
 ```
+
+Guia rapido:
+- `npm run clean`: remove artefatos locais de build/cache (`dist`, `.cache`, `.vite`).
+- `npm run cleanup:analyze`: verifica codigo/depencias sem uso.
+- `npm run cleanup:verify`: executa analise + validacao tecnica completa do app web.
 
 ## Performance Budget
 - Baseline inicial: `docs/performance/bundle-baseline.json`
