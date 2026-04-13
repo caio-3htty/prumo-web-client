@@ -48,6 +48,7 @@ const Dashboard = () => {
       { label: t("orders"), icon: ClipboardList, path: `/dashboard/${obraId}/pedidos` },
       { label: t("receipt"), icon: Truck, path: `/dashboard/${obraId}/recebimento` },
       { label: t("stock"), icon: PackageSearch, path: `/dashboard/${obraId}/estoque` },
+      { label: "Planejamento Compras", icon: LineChart, path: `/dashboard/${obraId}/planejamento` },
       { label: "Alertas", icon: BellRing, path: `/dashboard/${obraId}/alertas` },
       { label: "Substituicoes", icon: Shuffle, path: `/dashboard/${obraId}/substituicoes` },
       { label: "Relatorios", icon: LineChart, path: `/dashboard/${obraId}/relatorios` },

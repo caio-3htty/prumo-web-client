@@ -22,6 +22,9 @@ export const PageShell = ({ title, children }: { title: string; children: React.
       ? [
           { label: "Recebimento", path: `/dashboard/${obraId}/recebimento` },
           ...(can("estoque.view", obraId) ? [{ label: "Estoque", path: `/dashboard/${obraId}/estoque` }] : []),
+          ...(can("estoque.view", obraId)
+            ? [{ label: "Planejamento Compras", path: `/dashboard/${obraId}/planejamento` }]
+            : []),
           ...(role === "master" || role === "gestor" || role === "almoxarife"
             ? [{ label: "Almoxarife Rapido", path: `/dashboard/${obraId}/almoxarife` }]
             : []),

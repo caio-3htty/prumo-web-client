@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus } from "lucide-react";
+import { Pencil, Plus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageShell } from "@/components/PageShell";
@@ -158,6 +158,48 @@ const baseRoleOptions: Array<{ value: AppRole; label: string }> = [
   { value: "operacional", label: "Operacional" },
   { value: "almoxarife", label: "Almoxarife" },
 ];
+
+const auditEntityLabelMap: Record<string, string> = {
+  profiles: "Perfil",
+  user_roles: "Papel de acesso",
+  user_obras: "Vinculo de obra",
+  user_types: "Tipo de usuario",
+};
+
+const auditActionLabelMap: Record<string, string> = {
+  insert: "Criacao",
+  update: "Atualizacao",
+  delete: "Remocao",
+  admin_revert_access_change: "Reversao administrativa",
+  master_recovery_hotfix: "Recuperacao master (hotfix)",
+};
+
+const toRoleString = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (["master", "gestor", "engenheiro", "operacional", "almoxarife"].includes(normalized)) {
+    return normalized;
+  }
+  return null;
+};
+
+const getRoleFromAudit = (entry: AuditEntry) => {
+  return toRoleString(entry.new_data?.role) ?? toRoleString(entry.old_data?.role);
+};
+
+const isSovereignAuditEvent = (entry: AuditEntry) => {
+  const roleInSnapshot = getRoleFromAudit(entry);
+  return entry.action.startsWith("master_") || roleInSnapshot === "master";
+};
+
+const isRevertEligibleAuditEvent = (entry: AuditEntry) => {
+  if (!["user_roles", "user_obras", "profiles"].includes(entry.entity_table)) return false;
+  return ["insert", "update", "delete"].includes(entry.action);
+};
+
+const formatAuditEntity = (value: string) => auditEntityLabelMap[value] ?? value;
+const formatAuditAction = (value: string) => auditActionLabelMap[value] ?? value;
 
 const TYPE_ROLE_PERMISSION_DEFAULTS: Record<AppRole, "ALL" | string[]> = {
   master: "ALL",
@@ -536,6 +578,36 @@ const UsuariosAcessos = () => {
     () => users.filter((item) => item.is_active).length,
     [users],
   );
+
+  const governanceHealth = useMemo(() => {
+    const masters = users.filter((row) => {
+      const selectedType = row.user_type_id ? typeById[row.user_type_id] : null;
+      const effectiveRowRole = selectedType?.base_role ?? row.role;
+      return effectiveRowRole === "master";
+    });
+    const activeMasters = masters.filter((row) => row.is_active);
+    const mastersWithoutObra = masters.filter((row) => row.obraIds.length === 0);
+    const delegatedAdminsInactive = users.filter((row) => {
+      const selectedType = row.user_type_id ? typeById[row.user_type_id] : null;
+      const effectiveRowRole = selectedType?.base_role ?? row.role;
+      return (effectiveRowRole === "gestor" || effectiveRowRole === "engenheiro") && !row.is_active;
+    });
+    const delegatedAdminsWithoutObra = users.filter((row) => {
+      const selectedType = row.user_type_id ? typeById[row.user_type_id] : null;
+      const effectiveRowRole = selectedType?.base_role ?? row.role;
+      return (effectiveRowRole === "gestor" || effectiveRowRole === "engenheiro") && row.obraIds.length === 0;
+    });
+
+    return {
+      masters,
+      activeMasters,
+      mastersWithoutObra,
+      delegatedAdminsInactive,
+      delegatedAdminsWithoutObra,
+      hasSingleActiveMaster: activeMasters.length === 1,
+    };
+  }, [users, typeById]);
+
   const isSmallCompany = useMemo(
     () => obras.length <= 2 || activeUsersCount <= 15,
     [obras.length, activeUsersCount],
@@ -562,6 +634,10 @@ const UsuariosAcessos = () => {
     }
     return [];
   }, [effectiveRole]);
+
+  const selectedAuditSovereign = selectedAuditEntry ? isSovereignAuditEvent(selectedAuditEntry) : false;
+  const selectedAuditRevertEligible = selectedAuditEntry ? isRevertEligibleAuditEvent(selectedAuditEntry) : false;
+  const selectedAuditRevertBlockedByRole = selectedAuditSovereign && effectiveRole !== "master";
 
   const provisionableObras = useMemo(() => {
     if (effectiveRole === "engenheiro") {
@@ -852,6 +928,45 @@ const UsuariosAcessos = () => {
     },
   });
 
+  const revertAuditChange = useMutation({
+    mutationFn: async (auditId: string) => {
+      if (isViewingAs) {
+        throw new Error("Desative o modo visualizar como perfil para reverter alteracoes.");
+      }
+      const { data, error } = await supabaseAny.rpc("admin_revert_access_change", {
+        _audit_id: auditId,
+      });
+      if (error || !data?.ok) {
+        throw new Error(error?.message ?? data?.message ?? "Falha ao reverter alteracao.");
+      }
+      return data as { ok: boolean };
+    },
+    onSuccess: async () => {
+      toast.success("Alteracao revertida com sucesso.");
+      setSelectedAuditId(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-users-profiles"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-users-roles"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-users-assignments"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-users-permission-grants"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-audit-log"] }),
+      ]);
+      await refreshAccess();
+    },
+    onError: (error: Error) => {
+      const normalized = String(error.message ?? "").toLowerCase();
+      if (normalized.includes("somente master pode reverter eventos soberanos")) {
+        toast.error("Evento soberano: apenas master pode reverter.");
+        return;
+      }
+      if (normalized.includes("entidade nao suportada para reversao")) {
+        toast.error("Este evento nao e elegivel para reversao assistida.");
+        return;
+      }
+      toast.error(error.message);
+    },
+  });
+
   const openCreateType = () => {
     const defaultBaseRole = availableTypeBaseRoles[0]?.value ?? "operacional";
     setEditingType(null);
@@ -989,6 +1104,62 @@ const UsuariosAcessos = () => {
           </AlertDescription>
         </Alert>
       )}
+
+      <div className="mb-6 grid gap-3 md:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Health check de governanca</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>
+              Master ativo no tenant:{" "}
+              <span className={governanceHealth.hasSingleActiveMaster ? "font-semibold text-emerald-700" : "font-semibold text-destructive"}>
+                {governanceHealth.activeMasters.length}
+              </span>
+            </p>
+            {!governanceHealth.hasSingleActiveMaster && (
+              <p className="text-destructive">Esperado exatamente 1 master ativo por tenant.</p>
+            )}
+            <p>
+              Masters sem obra vinculada:{" "}
+              <span className={governanceHealth.mastersWithoutObra.length === 0 ? "font-semibold text-emerald-700" : "font-semibold text-destructive"}>
+                {governanceHealth.mastersWithoutObra.length}
+              </span>
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Semantica de papeis</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p><span className="font-medium text-foreground">Master:</span> soberano da empresa.</p>
+            <p><span className="font-medium text-foreground">Gestor:</span> administrador delegado e revogavel.</p>
+            <p><span className="font-medium text-foreground">Engenheiro:</span> aprovacao limitada ao nivel inferior.</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Contas administrativas</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>
+              Gestores/engenheiros inativos:{" "}
+              <span className={governanceHealth.delegatedAdminsInactive.length === 0 ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
+                {governanceHealth.delegatedAdminsInactive.length}
+              </span>
+            </p>
+            <p>
+              Gestores/engenheiros sem obra:{" "}
+              <span className={governanceHealth.delegatedAdminsWithoutObra.length === 0 ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
+                {governanceHealth.delegatedAdminsWithoutObra.length}
+              </span>
+            </p>
+          </CardContent>
+        </Card>
+      </div>
 
       <Tabs defaultValue="usuarios" className="space-y-6">
         <TabsList>
@@ -1311,6 +1482,7 @@ const UsuariosAcessos = () => {
                     <th className="px-4 py-3 text-left">Quando</th>
                     <th className="px-4 py-3 text-left">Entidade</th>
                     <th className="px-4 py-3 text-left">Acao</th>
+                    <th className="px-4 py-3 text-left">Criticidade</th>
                     <th className="px-4 py-3 text-left">Obra</th>
                     <th className="px-4 py-3 text-left">Alvo</th>
                     <th className="px-4 py-3 text-left">Autor</th>
@@ -1318,14 +1490,24 @@ const UsuariosAcessos = () => {
                 </thead>
                 <tbody>
                   {filteredAuditLog.map((entry) => (
+                    // Eventos soberanos recebem destaque para evitar reversoes indevidas.
                     <tr
                       key={entry.id}
-                      className="cursor-pointer border-t border-border hover:bg-muted/30"
+                      className={`cursor-pointer border-t border-border hover:bg-muted/30 ${
+                        isSovereignAuditEvent(entry) ? "bg-amber-50/50" : ""
+                      }`}
                       onClick={() => setSelectedAuditId(entry.id)}
                     >
                       <td className="px-4 py-3">{new Date(entry.created_at).toLocaleString("pt-BR")}</td>
-                      <td className="px-4 py-3">{entry.entity_table}</td>
-                      <td className="px-4 py-3">{entry.action}</td>
+                      <td className="px-4 py-3">{formatAuditEntity(entry.entity_table)}</td>
+                      <td className="px-4 py-3">{formatAuditAction(entry.action)}</td>
+                      <td className="px-4 py-3">
+                        {isSovereignAuditEvent(entry) ? (
+                          <Badge variant="destructive">Soberano</Badge>
+                        ) : (
+                          <Badge variant="outline">Delegado</Badge>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         {entry.obra_id ? (obraNameById[entry.obra_id] ?? entry.obra_id) : "-"}
                       </td>
@@ -1339,7 +1521,7 @@ const UsuariosAcessos = () => {
                   ))}
                   {filteredAuditLog.length === 0 && (
                     <tr>
-                      <td className="px-4 py-3 text-muted-foreground" colSpan={6}>
+                      <td className="px-4 py-3 text-muted-foreground" colSpan={7}>
                         Nenhuma alteracao registrada.
                       </td>
                     </tr>
@@ -1357,8 +1539,35 @@ const UsuariosAcessos = () => {
                   </Button>
                 </div>
                 <p className="mb-3 text-xs text-muted-foreground">
-                  {new Date(selectedAuditEntry.created_at).toLocaleString("pt-BR")} - {selectedAuditEntry.entity_table} - {selectedAuditEntry.action}
+                  {new Date(selectedAuditEntry.created_at).toLocaleString("pt-BR")} - {formatAuditEntity(selectedAuditEntry.entity_table)} - {formatAuditAction(selectedAuditEntry.action)}
                 </p>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <Badge variant={selectedAuditSovereign ? "destructive" : "outline"}>
+                    {selectedAuditSovereign ? "Evento soberano" : "Evento delegado"}
+                  </Badge>
+                  {!selectedAuditRevertEligible && (
+                    <Badge variant="secondary">Sem reversao assistida</Badge>
+                  )}
+                  {selectedAuditRevertBlockedByRole && (
+                    <Badge variant="secondary">Somente master pode reverter este evento</Badge>
+                  )}
+                </div>
+                <div className="mb-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      revertAuditChange.isPending ||
+                      isViewingAs ||
+                      !selectedAuditRevertEligible ||
+                      selectedAuditRevertBlockedByRole
+                    }
+                    onClick={() => selectedAuditEntry && revertAuditChange.mutate(selectedAuditEntry.id)}
+                  >
+                    <RotateCcw className="mr-1 h-4 w-4" />
+                    Reverter alteracao
+                  </Button>
+                </div>
                 {selectedAuditDiffRows.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
                     Nao houve mudanca de campos estruturados entre old_data e new_data.

@@ -199,6 +199,20 @@ const App = () => (
                 )}
               />
               <Route
+                path="/dashboard/:obraId/planejamento"
+                element={(
+                  <ProtectedRoute>
+                    <RequireRole allowed={["master", "gestor", "almoxarife", "engenheiro"]}>
+                      <RequireObraAccess>
+                        <RequireObraPermission permission="estoque.view">
+                          {lazyPage(<EstoqueManager />)}
+                        </RequireObraPermission>
+                      </RequireObraAccess>
+                    </RequireRole>
+                  </ProtectedRoute>
+                )}
+              />
+              <Route
                 path="/dashboard/:obraId/alertas"
                 element={(
                   <ProtectedRoute>

@@ -49,6 +49,7 @@ const Login = () => {
   const [companyName, setCompanyName] = useState("");
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [companySuggestions, setCompanySuggestions] = useState<CompanySuggestion[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<CompanySuggestion | null>(null);
   const [loadingCompanies, setLoadingCompanies] = useState(false);
   const [username, setUsername] = useState("");
   const [jobTitle, setJobTitle] = useState("");
@@ -82,6 +83,7 @@ const Login = () => {
   useEffect(() => {
     if (signupMode === "company_owner" || !isSignUp) {
       setTenantId(null);
+      setSelectedCompany(null);
       setCompanySuggestions([]);
       setLoadingCompanies(false);
       return;
@@ -173,6 +175,10 @@ const Login = () => {
           } else if (normalizedMessage.includes("empresa") && normalizedMessage.includes("nao encontrada")) {
             toast.error("Empresa nao encontrada", {
               description: "Confira o nome da empresa ou solicite primeiro a criacao da conta empresa.",
+            });
+          } else if (errorCode.includes("tenant_required")) {
+            toast.error("Selecione uma empresa da lista", {
+              description: "Para conta interna, escolha uma empresa valida antes de enviar.",
             });
           } else if (normalizedMessage.includes("empresa") && normalizedMessage.includes("ja existe")) {
             toast.error("Empresa ja cadastrada", {
@@ -272,6 +278,7 @@ const Login = () => {
                       onClick={() => {
                         setSignupMode("company_owner");
                         setAttemptedSubmit(false);
+                        setSelectedCompany(null);
                       }}
                     >
                       Conta empresa
@@ -282,6 +289,7 @@ const Login = () => {
                       onClick={() => {
                         setSignupMode("company_internal");
                         setAttemptedSubmit(false);
+                        setSelectedCompany(null);
                       }}
                     >
                       Conta interna
@@ -326,6 +334,7 @@ const Login = () => {
                       setCompanyName(next);
                       if (signupMode === "company_internal") {
                         setTenantId(null);
+                        setSelectedCompany(null);
                       }
                     }}
                     autoComplete="organization"
@@ -350,6 +359,7 @@ const Login = () => {
                               onClick={() => {
                                 setCompanyName(company.name);
                                 setTenantId(company.tenant_id ?? company.id);
+                                setSelectedCompany(company);
                                 setCompanySuggestions([]);
                               }}
                             >
@@ -370,9 +380,24 @@ const Login = () => {
                         </p>
                       )}
                       {tenantId && (
-                        <p className="text-xs text-emerald-600">
-                          Empresa validada para envio da solicitacao.
-                        </p>
+                        <div className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                          <p className="font-medium">Empresa selecionada para solicitacao interna</p>
+                          <p>
+                            {selectedCompany?.name ?? companyName}
+                            {selectedCompany?.slug ? ` (${selectedCompany.slug})` : ""}
+                          </p>
+                          <button
+                            type="button"
+                            className="mt-1 underline"
+                            onClick={() => {
+                              setTenantId(null);
+                              setSelectedCompany(null);
+                              setCompanySuggestions([]);
+                            }}
+                          >
+                            Alterar empresa selecionada
+                          </button>
+                        </div>
                       )}
                       {attemptedSubmit && signupErrors.tenantId && (
                         <p className="text-xs text-destructive">{signupErrors.tenantId}</p>
