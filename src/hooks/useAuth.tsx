@@ -2,6 +2,21 @@ import { useState, useEffect, createContext, useContext, type ReactNode, useCall
 import type { Session, User } from "@supabase/supabase-js";
 
 import { supabase } from "@/integrations/supabase/client";
+import {
+  disableQuickUnlock,
+  getQuickUnlockConfig,
+  hasDesktopQuickUnlockBridge,
+  setQuickUnlockPin,
+  verifyQuickUnlockPin,
+} from "@/lib/desktopBridge";
+import {
+  clearSessionMeta,
+  ensureSessionMeta,
+  isSessionExpiredByPolicy,
+  markSessionExpiredFlag,
+  readSessionMeta,
+  writeSessionMeta,
+} from "@/lib/sessionLifecycle";
 
 export type AppRole = "master" | "gestor" | "engenheiro" | "operacional" | "almoxarife";
 export type PermissionScopeType = "tenant" | "all_obras" | "selected_obras";
@@ -49,8 +64,16 @@ interface AuthContextType {
   multiObraEnabled: boolean;
   defaultObraId: string | null;
   preferredLanguage: AppLanguage;
+  sessionLocked: boolean;
+  quickUnlockSetupRequired: boolean;
+  rememberEnabled: boolean;
   refreshAccess: () => Promise<void>;
   signOut: () => Promise<void>;
+  signOutAllDevices: () => Promise<void>;
+  setRememberPreference: (enabled: boolean) => void;
+  setupQuickUnlockPin: (pin: string) => Promise<boolean>;
+  unlockSessionWithPin: (pin: string) => Promise<boolean>;
+  disableQuickUnlock: () => Promise<void>;
   can: (permissionKey: string, obraId?: string | null) => boolean;
 }
 
@@ -70,8 +93,16 @@ const AuthContext = createContext<AuthContextType>({
   multiObraEnabled: true,
   defaultObraId: null,
   preferredLanguage: "pt-BR",
+  sessionLocked: false,
+  quickUnlockSetupRequired: false,
+  rememberEnabled: true,
   refreshAccess: async () => {},
   signOut: async () => {},
+  signOutAllDevices: async () => {},
+  setRememberPreference: () => {},
+  setupQuickUnlockPin: async () => false,
+  unlockSessionWithPin: async () => false,
+  disableQuickUnlock: async () => {},
   can: () => false,
 });
 
@@ -104,6 +135,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [permissions, setPermissions] = useState<EffectivePermission[]>([]);
   const [multiObraEnabled, setMultiObraEnabled] = useState(true);
   const [defaultObraId, setDefaultObraId] = useState<string | null>(null);
+  const [sessionLocked, setSessionLocked] = useState(false);
+  const [quickUnlockSetupRequired, setQuickUnlockSetupRequired] = useState(false);
+  const [rememberEnabled, setRememberEnabled] = useState(true);
 
   const clearAccess = useCallback(() => {
     setProfile(null);
@@ -113,6 +147,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setTenantId(null);
     setMultiObraEnabled(true);
     setDefaultObraId(null);
+    setSessionLocked(false);
+    setQuickUnlockSetupRequired(false);
+    setRememberEnabled(true);
     setLoadingAccess(false);
   }, []);
 
@@ -240,15 +277,76 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setLoadingAccess(false);
   }, [clearAccess]);
 
+  const setRememberPreference = useCallback((enabled: boolean) => {
+    const next = ensureSessionMeta(readSessionMeta(), { rememberEnabled: enabled });
+    writeSessionMeta(next);
+    setRememberEnabled(next.rememberEnabled);
+  }, []);
+
+  const setupQuickUnlockPin = useCallback(async (pin: string) => {
+    const normalized = pin.trim();
+    if (!/^\d{4,8}$/.test(normalized)) return false;
+    const ok = await setQuickUnlockPin(normalized);
+    if (!ok) return false;
+
+    const next = ensureSessionMeta(readSessionMeta(), { quickUnlockEnabled: true });
+    writeSessionMeta(next);
+    setQuickUnlockSetupRequired(false);
+    setSessionLocked(false);
+    return true;
+  }, []);
+
+  const unlockSessionWithPin = useCallback(async (pin: string) => {
+    const normalized = pin.trim();
+    if (!/^\d{4,8}$/.test(normalized)) return false;
+    const ok = await verifyQuickUnlockPin(normalized);
+    if (ok) {
+      setSessionLocked(false);
+    }
+    return ok;
+  }, []);
+
+  const disableQuickUnlockAction = useCallback(async () => {
+    await disableQuickUnlock();
+    const next = ensureSessionMeta(readSessionMeta(), { quickUnlockEnabled: false });
+    writeSessionMeta(next);
+    setSessionLocked(false);
+    setQuickUnlockSetupRequired(false);
+  }, []);
+
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const handleSessionLifecycle = async (nextSession: Session | null) => {
+      if (!nextSession) {
+        clearSessionMeta();
+        setSession(null);
+        setLoading(false);
+        return;
+      }
+
+      const currentMeta = readSessionMeta();
+      const mergedMeta = ensureSessionMeta(currentMeta);
+
+      if (isSessionExpiredByPolicy(mergedMeta)) {
+        clearSessionMeta();
+        markSessionExpiredFlag();
+        await supabase.auth.signOut({ scope: "local" });
+        setSession(null);
+        setLoading(false);
+        return;
+      }
+
+      writeSessionMeta(mergedMeta);
+      setRememberEnabled(mergedMeta.rememberEnabled);
       setSession(nextSession);
       setLoading(false);
+    };
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      void handleSessionLifecycle(nextSession);
     });
 
     supabase.auth.getSession().then(({ data: { session: nextSession } }) => {
-      setSession(nextSession);
-      setLoading(false);
+      void handleSessionLifecycle(nextSession);
     });
 
     return () => subscription.unsubscribe();
@@ -266,12 +364,49 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
   }, [session?.user?.id, clearAccess, loadAccess]);
 
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId || !hasDesktopQuickUnlockBridge()) {
+      setSessionLocked(false);
+      setQuickUnlockSetupRequired(false);
+      return;
+    }
+
+    let cancelled = false;
+    void getQuickUnlockConfig().then((config) => {
+      if (cancelled) return;
+      if (!config.enabled) {
+        setSessionLocked(false);
+        setQuickUnlockSetupRequired(false);
+        return;
+      }
+      if (!config.hasPin) {
+        setSessionLocked(false);
+        setQuickUnlockSetupRequired(true);
+        return;
+      }
+      setQuickUnlockSetupRequired(false);
+      setSessionLocked(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
   const refreshAccess = useCallback(async () => {
     await loadAccess(session?.user?.id);
   }, [loadAccess, session?.user?.id]);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    clearSessionMeta();
+    await supabase.auth.signOut({ scope: "local" });
+    clearAccess();
+  };
+
+  const signOutAllDevices = async () => {
+    clearSessionMeta();
+    await supabase.auth.signOut({ scope: "global" });
     clearAccess();
   };
 
@@ -310,8 +445,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         multiObraEnabled,
         defaultObraId,
         preferredLanguage: profile?.preferred_language ?? "pt-BR",
+        sessionLocked,
+        quickUnlockSetupRequired,
+        rememberEnabled,
         refreshAccess,
         signOut,
+        signOutAllDevices,
+        setRememberPreference,
+        setupQuickUnlockPin,
+        unlockSessionWithPin,
+        disableQuickUnlock: disableQuickUnlockAction,
         can,
       }}
     >

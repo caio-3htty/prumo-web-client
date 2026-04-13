@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/useAuth";
 import { useI18n } from "@/i18n/useI18n";
 import { supabase } from "@/integrations/supabase/client";
+import { consumeSessionFlag } from "@/lib/sessionLifecycle";
 import { getSupabaseFunctionErrorMessage } from "@/lib/supabaseFunctionError";
 import {
   hasValidationErrors,
@@ -39,7 +40,7 @@ const roleOptions: Array<{ value: AppRole; label: string }> = [
 ];
 
 const Login = () => {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, setRememberPreference } = useAuth();
   const navigate = useNavigate();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
@@ -57,6 +58,7 @@ const Login = () => {
   const [requestedRole, setRequestedRole] = useState<AppRole>("operacional");
   const [attemptedSubmit, setAttemptedSubmit] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const { t } = useI18n();
 
   const signupErrors = isSignUp
@@ -79,6 +81,15 @@ const Login = () => {
       navigate("/", { replace: true });
     }
   }, [authLoading, navigate, user]);
+
+  useEffect(() => {
+    const flag = consumeSessionFlag();
+    if (flag?.reason === "policy_expired") {
+      toast.info("Sessao expirada", {
+        description: "Por seguranca, faca login novamente para continuar.",
+      });
+    }
+  }, []);
 
   useEffect(() => {
     if (signupMode === "company_owner" || !isSignUp) {
@@ -224,6 +235,13 @@ const Login = () => {
           } else {
             toast.error(error.message, { description: t("signInError") });
           }
+        } else {
+          setRememberPreference(rememberMe);
+          toast.success("Login realizado", {
+            description: rememberMe
+              ? "Voce continuara conectado neste dispositivo."
+              : "Sessao temporaria ativa.",
+          });
         }
       }
     } finally {
@@ -506,6 +524,17 @@ const Login = () => {
                   minLength={6}
                 />
               </div>
+
+              {!isSignUp && (
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(event) => setRememberMe(event.target.checked)}
+                  />
+                  Manter conectado
+                </label>
+              )}
 
               <Button type="submit" className="w-full" disabled={loading || hasSignupErrors}>
                 {loading ? (

@@ -33,6 +33,7 @@ const PedidosCompraManager = lazy(() => import("./pages/PedidosCompraManager"));
 const RecebimentoManager = lazy(() => import("./pages/RecebimentoManager"));
 const RelatoriosPedidos = lazy(() => import("./pages/RelatoriosPedidos"));
 const SemAcesso = lazy(() => import("./pages/SemAcesso"));
+const SessionUnlock = lazy(() => import("./pages/SessionUnlock"));
 const SubstituicoesManager = lazy(() => import("./pages/SubstituicoesManager"));
 const UsuariosAcessos = lazy(() => import("./pages/UsuariosAcessos"));
 
@@ -56,6 +57,7 @@ const App = () => (
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/acesso/avaliar" element={lazyPage(<AccessRequestReview />)} />
+              <Route path="/desbloquear" element={lazyPage(<SessionUnlock />)} />
 
               <Route
                 path="/"

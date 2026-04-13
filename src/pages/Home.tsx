@@ -12,7 +12,7 @@ import { canManageCadastros, roleLabelMap } from "@/lib/rbac";
 
 const Home = () => {
   const navigate = useNavigate();
-  const { role, obras, signOut, can } = useAuth();
+  const { role, obras, signOut, signOutAllDevices, can } = useAuth();
   const { t } = useI18n();
 
   const showCadastros =
@@ -40,7 +40,10 @@ const Home = () => {
           <div className="flex items-center gap-3">
             <LanguageSwitcher />
             <Button variant="ghost" size="sm" onClick={signOut}>
-              <LogOut className="mr-1 h-4 w-4" /> {t("logout")}
+              Trocar conta
+            </Button>
+            <Button variant="ghost" size="sm" onClick={signOutAllDevices}>
+              <LogOut className="mr-1 h-4 w-4" /> Sair de todos
             </Button>
           </div>
         </div>

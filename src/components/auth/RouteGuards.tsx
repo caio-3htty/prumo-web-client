@@ -11,7 +11,7 @@ const FullPageLoader = () => (
 );
 
 export const ProtectedRoute = ({ children }: { children: ReactNode }) => {
-  const { user, loading } = useAuth();
+  const { user, loading, sessionLocked, quickUnlockSetupRequired } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -20,6 +20,10 @@ export const ProtectedRoute = ({ children }: { children: ReactNode }) => {
 
   if (!user) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
+
+  if ((sessionLocked || quickUnlockSetupRequired) && location.pathname !== "/desbloquear") {
+    return <Navigate to="/desbloquear" replace />;
   }
 
   return <>{children}</>;

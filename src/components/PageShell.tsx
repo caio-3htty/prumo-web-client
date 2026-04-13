@@ -11,7 +11,7 @@ export const PageShell = ({ title, children }: { title: string; children: React.
   const { obraId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { role, signOut, can } = useAuth();
+  const { role, signOut, signOutAllDevices, can } = useAuth();
 
   const inObraRoute = !!obraId && location.pathname.startsWith(`/dashboard/${obraId}`);
 
@@ -78,9 +78,14 @@ export const PageShell = ({ title, children }: { title: string; children: React.
             </Button>
             <h1 className="text-lg font-bold">{title}</h1>
           </div>
-          <Button variant="ghost" size="sm" onClick={signOut}>
-            <LogOut className="mr-1 h-4 w-4" /> Sair
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={signOut}>
+              Trocar conta
+            </Button>
+            <Button variant="ghost" size="sm" onClick={signOutAllDevices}>
+              <LogOut className="mr-1 h-4 w-4" /> Sair de todos
+            </Button>
+          </div>
         </div>
         <div className="mx-auto max-w-6xl px-4 md:px-8">
           <nav className="-mb-px flex gap-1 overflow-x-auto">
