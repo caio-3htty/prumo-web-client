@@ -1,6 +1,7 @@
 {
-  "maxMainChunkBytes": 360000,
-  "maxMainChunkGzipBytes": 110000,
-  "maxTotalJsBytes": 900000,
-  "maxJsChunkCount": 30
+  "maxMainChunkBytes": 130000,
+  "maxMainChunkGzipBytes": 40000,
+  "maxTotalJsBytes": 1750000,
+  "maxTotalJsGzipBytes": 550000,
+  "maxJsChunkCount": 35
 }

@@ -33,6 +33,12 @@ async function main() {
     failures.push(`totalJsBytes ${report.totalJsBytes} > limite ${budget.maxTotalJsBytes}`);
   }
 
+  if (budget.maxTotalJsGzipBytes != null && report.totalJsGzipBytes > budget.maxTotalJsGzipBytes) {
+    failures.push(
+      `totalJsGzipBytes ${report.totalJsGzipBytes} > limite ${budget.maxTotalJsGzipBytes}`
+    );
+  }
+
   if (budget.maxJsChunkCount != null && report.jsChunkCount > budget.maxJsChunkCount) {
     failures.push(`jsChunkCount ${report.jsChunkCount} > limite ${budget.maxJsChunkCount}`);
   }
