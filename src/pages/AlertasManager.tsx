@@ -74,16 +74,22 @@ const AlertasManager = () => {
     mutationFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const supabaseAny = supabase as any;
-      const { data, error } = await supabaseAny.rpc("executar_ciclo_notificacoes", {
+      const { data, error } = await supabaseAny.rpc("executar_ciclo_notificacoes_p4", {
         _tenant_id: tenantId,
       });
-      if (error) throw error;
-      return data;
+      if (!error) return data;
+
+      const fallback = await supabaseAny.rpc("executar_ciclo_notificacoes", {
+        _tenant_id: tenantId,
+      });
+      if (fallback.error) throw fallback.error;
+      return fallback.data;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["notificacoes", obraId] });
+      const base = data?.base ?? data ?? {};
       toast.success("Ciclo de alertas executado", {
-        description: `Criados: ${data?.created ?? 0} | Repetidos: ${data?.repeated ?? 0} | Escalados: ${data?.escalated ?? 0}`,
+        description: `Criados: ${base?.created ?? 0} | Repetidos: ${base?.repeated ?? 0} | Escalados: ${base?.escalated ?? 0}`,
       });
     },
     onError: (error: Error) => toast.error(error.message),

@@ -26,6 +26,9 @@ interface Material {
   unidade: string;
   tempo_producao_padrao: number | null;
   estoque_minimo: number;
+  estoque_seguranca: number;
+  criticidade: "baixa" | "media" | "alta" | "critica";
+  consumo_medio_diario: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -36,6 +39,9 @@ const formSchema = z.object({
   unidade: z.string().min(1, "Unidade e obrigatoria"),
   tempo_producao_padrao: z.string().optional(),
   estoque_minimo: z.string().optional(),
+  estoque_seguranca: z.string().optional(),
+  criticidade: z.enum(["baixa", "media", "alta", "critica"]),
+  consumo_medio_diario: z.string().optional(),
 });
 
 const MateriaisManager = () => {
@@ -50,6 +56,9 @@ const MateriaisManager = () => {
     unidade: "un",
     tempo_producao_padrao: "",
     estoque_minimo: "0",
+    estoque_seguranca: "0",
+    criticidade: "media" as "baixa" | "media" | "alta" | "critica",
+    consumo_medio_diario: "0",
   });
   const [showTrash, setShowTrash] = useState(false);
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -77,6 +86,9 @@ const MateriaisManager = () => {
       unidade: string;
       tempo_producao_padrao: number | null;
       estoque_minimo: number;
+      estoque_seguranca: number;
+      criticidade: "baixa" | "media" | "alta" | "critica";
+      consumo_medio_diario: number;
       id?: string;
     }) => {
       if (values.id) {
@@ -138,7 +150,15 @@ const MateriaisManager = () => {
 
   const openNew = () => {
     setEditing(null);
-    setForm({ nome: "", unidade: "un", tempo_producao_padrao: "", estoque_minimo: "0" });
+    setForm({
+      nome: "",
+      unidade: "un",
+      tempo_producao_padrao: "",
+      estoque_minimo: "0",
+      estoque_seguranca: "0",
+      criticidade: "media",
+      consumo_medio_diario: "0",
+    });
     setOpen(true);
   };
 
@@ -149,6 +169,9 @@ const MateriaisManager = () => {
       unidade: material.unidade,
       tempo_producao_padrao: material.tempo_producao_padrao?.toString() ?? "",
       estoque_minimo: material.estoque_minimo.toString(),
+      estoque_seguranca: (material.estoque_seguranca ?? 0).toString(),
+      criticidade: material.criticidade ?? "media",
+      consumo_medio_diario: (material.consumo_medio_diario ?? 0).toString(),
     });
     setOpen(true);
   };
@@ -166,12 +189,15 @@ const MateriaisManager = () => {
     }
 
     const payload = {
-      nome: form.nome,
-      unidade: form.unidade,
-      tempo_producao_padrao: form.tempo_producao_padrao
-        ? Number.parseInt(form.tempo_producao_padrao, 10)
+      nome: parsed.data.nome,
+      unidade: parsed.data.unidade,
+      tempo_producao_padrao: parsed.data.tempo_producao_padrao
+        ? Number.parseInt(parsed.data.tempo_producao_padrao, 10)
         : null,
-      estoque_minimo: Number.parseFloat(form.estoque_minimo) || 0,
+      estoque_minimo: Number.parseFloat(parsed.data.estoque_minimo || "0") || 0,
+      estoque_seguranca: Number.parseFloat(parsed.data.estoque_seguranca || "0") || 0,
+      criticidade: parsed.data.criticidade,
+      consumo_medio_diario: Number.parseFloat(parsed.data.consumo_medio_diario || "0") || 0,
       ...(editing ? { id: editing.id } : {}),
     };
 
@@ -181,6 +207,7 @@ const MateriaisManager = () => {
   const columns = [
     { key: "nome", label: "Nome" },
     { key: "unidade", label: "Unidade" },
+    { key: "criticidade", label: "Criticidade" },
     ...(showTrash
       ? [
           {
@@ -197,6 +224,8 @@ const MateriaisManager = () => {
       render: (item: Material) => item.tempo_producao_padrao ?? "-",
     },
     { key: "estoque_minimo", label: "Estoque Minimo" },
+    { key: "estoque_seguranca", label: "Estoque seguranca" },
+    { key: "consumo_medio_diario", label: "Consumo medio/dia" },
     ...(canManage
       ? [
           {
@@ -261,7 +290,7 @@ const MateriaisManager = () => {
         <DataTable
           data={materiais}
           columns={columns}
-          searchKeys={["nome", "unidade"]}
+          searchKeys={["nome", "unidade", "criticidade"]}
           searchPlaceholder="Buscar materiais..."
         />
       )}
@@ -300,6 +329,42 @@ const MateriaisManager = () => {
                 value={form.estoque_minimo}
                 onChange={(event) => setForm({ ...form, estoque_minimo: event.target.value })}
               />
+            </div>
+            <div>
+              <Label>Estoque de Seguranca</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={form.estoque_seguranca}
+                onChange={(event) => setForm({ ...form, estoque_seguranca: event.target.value })}
+              />
+            </div>
+            <div>
+              <Label>Consumo Medio Diario</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={form.consumo_medio_diario}
+                onChange={(event) => setForm({ ...form, consumo_medio_diario: event.target.value })}
+              />
+            </div>
+            <div>
+              <Label>Criticidade</Label>
+              <select
+                value={form.criticidade}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    criticidade: event.target.value as "baixa" | "media" | "alta" | "critica",
+                  })
+                }
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="baixa">Baixa</option>
+                <option value="media">Media</option>
+                <option value="alta">Alta</option>
+                <option value="critica">Critica</option>
+              </select>
             </div>
           </div>
           <DialogFooter>

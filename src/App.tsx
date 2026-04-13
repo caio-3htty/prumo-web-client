@@ -25,6 +25,7 @@ const AlmoxarifeRapido = lazy(() => import("./pages/AlmoxarifeRapido"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const EstoqueManager = lazy(() => import("./pages/EstoqueManager"));
 const FornecedoresManager = lazy(() => import("./pages/FornecedoresManager"));
+const ImportacaoLote = lazy(() => import("./pages/ImportacaoLote"));
 const MateriaisManager = lazy(() => import("./pages/MateriaisManager"));
 const MaterialFornecedorManager = lazy(() => import("./pages/MaterialFornecedorManager"));
 const ObrasManager = lazy(() => import("./pages/ObrasManager"));
@@ -131,6 +132,16 @@ const App = () => (
                 )}
               />
 
+              <Route
+                path="/importacao-lote"
+                element={(
+                  <ProtectedRoute>
+                    <RequirePermission anyOf={["users.manage", "import.manage"]}>
+                      {lazyPage(<ImportacaoLote />)}
+                    </RequirePermission>
+                  </ProtectedRoute>
+                )}
+              />
               <Route
                 path="/dashboard/:obraId"
                 element={(

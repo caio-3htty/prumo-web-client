@@ -71,6 +71,13 @@ type PermissionCatalogItem = {
   is_active: boolean;
 };
 
+type TypePermissionScope = "tenant" | "all_obras";
+type UserTypePermissionRow = {
+  user_type_id: string;
+  permission_key: string;
+  scope_type: TypePermissionScope;
+};
+
 type TypeForm = {
   name: string;
   description: string;
@@ -86,6 +93,18 @@ type ProvisionForm = {
   role: AppRole;
   obra_ids: string[];
   temp_password: string;
+};
+
+type AuditEntry = {
+  id: string;
+  entity_table: string;
+  action: string;
+  changed_by: string | null;
+  target_user_id: string | null;
+  obra_id: string | null;
+  old_data: Record<string, unknown> | null;
+  new_data: Record<string, unknown> | null;
+  created_at: string;
 };
 
 const defaultTypeForm: TypeForm = {
@@ -105,6 +124,33 @@ const defaultProvisionForm: ProvisionForm = {
   temp_password: "",
 };
 
+const toComparableString = (value: unknown) => {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const buildAuditDiffRows = (entry: AuditEntry) => {
+  const oldData = entry.old_data ?? {};
+  const newData = entry.new_data ?? {};
+  const keys = Array.from(new Set([...Object.keys(oldData), ...Object.keys(newData)])).sort();
+
+  return keys
+    .map((key) => {
+      const before = toComparableString(oldData[key]);
+      const after = toComparableString(newData[key]);
+      if (before === after) return null;
+      return { key, before, after };
+    })
+    .filter((item): item is { key: string; before: string; after: string } => item !== null);
+};
+
 const baseRoleOptions: Array<{ value: AppRole; label: string }> = [
   { value: "master", label: "Master" },
   { value: "gestor", label: "Gestor" },
@@ -112,6 +158,55 @@ const baseRoleOptions: Array<{ value: AppRole; label: string }> = [
   { value: "operacional", label: "Operacional" },
   { value: "almoxarife", label: "Almoxarife" },
 ];
+
+const TYPE_ROLE_PERMISSION_DEFAULTS: Record<AppRole, "ALL" | string[]> = {
+  master: "ALL",
+  gestor: [
+    "users.manage",
+    "audit.view",
+    "obras.view",
+    "obras.manage",
+    "fornecedores.view",
+    "fornecedores.manage",
+    "materiais.view",
+    "materiais.manage",
+    "material_fornecedor.view",
+    "material_fornecedor.manage",
+    "pedidos.view",
+    "pedidos.create",
+    "pedidos.edit_base",
+    "pedidos.approve",
+    "pedidos.receive",
+    "pedidos.delete",
+    "estoque.view",
+    "estoque.manage",
+  ],
+  operacional: [
+    "obras.view",
+    "fornecedores.view",
+    "fornecedores.manage",
+    "materiais.view",
+    "materiais.manage",
+    "material_fornecedor.view",
+    "material_fornecedor.manage",
+    "pedidos.view",
+    "pedidos.create",
+    "pedidos.edit_base",
+  ],
+  engenheiro: [
+    "obras.view",
+    "pedidos.view",
+    "pedidos.approve",
+    "estoque.view",
+  ],
+  almoxarife: [
+    "obras.view",
+    "pedidos.view",
+    "pedidos.receive",
+    "estoque.view",
+    "estoque.manage",
+  ],
+};
 
 const UsuariosAcessos = () => {
   const queryClient = useQueryClient();
@@ -123,9 +218,17 @@ const UsuariosAcessos = () => {
   const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [editingType, setEditingType] = useState<CompanyUserType | null>(null);
   const [typeForm, setTypeForm] = useState<TypeForm>(defaultTypeForm);
+  const [typePermissions, setTypePermissions] = useState<Record<string, TypePermissionScope>>({});
   const [provisionDialogOpen, setProvisionDialogOpen] = useState(false);
   const [provisionForm, setProvisionForm] = useState<ProvisionForm>(defaultProvisionForm);
   const [attemptedProvisionSubmit, setAttemptedProvisionSubmit] = useState(false);
+  const [viewAsRole, setViewAsRole] = useState<AppRole | "none">("none");
+  const [auditActorFilter, setAuditActorFilter] = useState<string>("all");
+  const [auditTargetFilter, setAuditTargetFilter] = useState<string>("all");
+  const [auditObraFilter, setAuditObraFilter] = useState<string>("all");
+  const [auditStartDate, setAuditStartDate] = useState("");
+  const [auditEndDate, setAuditEndDate] = useState("");
+  const [selectedAuditId, setSelectedAuditId] = useState<string | null>(null);
   const provisionErrors = validateProvisionInput({
     fullName: provisionForm.full_name,
     email: provisionForm.email,
@@ -215,6 +318,17 @@ const UsuariosAcessos = () => {
     },
   });
 
+  const { data: userTypePermissions = [] } = useQuery({
+    queryKey: ["admin-user-type-permissions"],
+    queryFn: async () => {
+      const { data, error } = await supabaseAny
+        .from("user_type_permissions")
+        .select("user_type_id, permission_key, scope_type");
+      if (error) throw error;
+      return (data ?? []) as UserTypePermissionRow[];
+    },
+  });
+
   const { data: permissionGrants = [] } = useQuery({
     queryKey: ["admin-users-permission-grants"],
     queryFn: async () => {
@@ -263,9 +377,9 @@ const UsuariosAcessos = () => {
         .select("id, entity_table, action, changed_by, target_user_id, obra_id, old_data, new_data, created_at")
         .in("entity_table", ["user_roles", "user_obras", "profiles", "user_types"])
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(120);
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as AuditEntry[];
     },
   });
 
@@ -282,6 +396,43 @@ const UsuariosAcessos = () => {
       return acc;
     }, {});
   }, [userTypes]);
+
+  const permissionCatalogByKey = useMemo(() => {
+    return permissionCatalog.reduce<Record<string, PermissionCatalogItem>>((acc, item) => {
+      acc[item.key] = item;
+      return acc;
+    }, {});
+  }, [permissionCatalog]);
+
+  const permissionCatalogByArea = useMemo(() => {
+    return permissionCatalog.reduce<Record<string, PermissionCatalogItem[]>>((acc, item) => {
+      if (!acc[item.area]) acc[item.area] = [];
+      acc[item.area].push(item);
+      return acc;
+    }, {});
+  }, [permissionCatalog]);
+
+  const userTypePermissionsByTypeId = useMemo(() => {
+    return userTypePermissions.reduce<Record<string, UserTypePermissionRow[]>>((acc, item) => {
+      if (!acc[item.user_type_id]) acc[item.user_type_id] = [];
+      acc[item.user_type_id].push(item);
+      return acc;
+    }, {});
+  }, [userTypePermissions]);
+
+  const buildDefaultTypePermissions = (baseRole: AppRole): Record<string, TypePermissionScope> => {
+    const defaults = TYPE_ROLE_PERMISSION_DEFAULTS[baseRole];
+    const allowedKeys =
+      defaults === "ALL"
+        ? new Set(permissionCatalog.map((item) => item.key))
+        : new Set(defaults);
+
+    return permissionCatalog.reduce<Record<string, TypePermissionScope>>((acc, permission) => {
+      if (!allowedKeys.has(permission.key)) return acc;
+      acc[permission.key] = permission.obra_scoped ? "all_obras" : "tenant";
+      return acc;
+    }, {});
+  };
 
   const obraIdsByUserId = useMemo(() => {
     return assignments.reduce<Record<string, string[]>>((acc, item) => {
@@ -324,6 +475,45 @@ const UsuariosAcessos = () => {
     }, {});
   }, [profiles]);
 
+  const obraNameById = useMemo(() => {
+    return obras.reduce<Record<string, string>>((acc, obra) => {
+      acc[obra.id] = obra.name;
+      return acc;
+    }, {});
+  }, [obras]);
+
+  const effectiveRole = viewAsRole === "none" ? role : viewAsRole;
+  const isViewingAs = viewAsRole !== "none";
+
+  const filteredAuditLog = useMemo(() => {
+    const startDate = auditStartDate ? new Date(`${auditStartDate}T00:00:00`) : null;
+    const endDate = auditEndDate ? new Date(`${auditEndDate}T23:59:59`) : null;
+
+    return auditLog.filter((entry) => {
+      if (auditActorFilter !== "all" && (entry.changed_by ?? "-") !== auditActorFilter) return false;
+      if (auditTargetFilter !== "all" && (entry.target_user_id ?? "-") !== auditTargetFilter) return false;
+      if (auditObraFilter !== "all" && (entry.obra_id ?? "-") !== auditObraFilter) return false;
+
+      if (startDate || endDate) {
+        const createdAt = new Date(entry.created_at);
+        if (startDate && createdAt < startDate) return false;
+        if (endDate && createdAt > endDate) return false;
+      }
+
+      return true;
+    });
+  }, [auditLog, auditActorFilter, auditTargetFilter, auditObraFilter, auditStartDate, auditEndDate]);
+
+  const selectedAuditEntry = useMemo(
+    () => filteredAuditLog.find((entry) => entry.id === selectedAuditId) ?? null,
+    [filteredAuditLog, selectedAuditId],
+  );
+
+  const selectedAuditDiffRows = useMemo(
+    () => (selectedAuditEntry ? buildAuditDiffRows(selectedAuditEntry) : []),
+    [selectedAuditEntry],
+  );
+
   const users = useMemo(() => {
     return profiles.map((profile) => {
       const fallback: EditableUser = {
@@ -352,34 +542,39 @@ const UsuariosAcessos = () => {
   );
 
   const availableProvisionRoles = useMemo(() => {
-    if (role === "master") {
+    if (effectiveRole === "master") {
       return baseRoleOptions;
     }
-    if (role === "gestor") {
+    if (effectiveRole === "gestor") {
       return baseRoleOptions.filter((item) => item.value !== "master");
     }
-    if (role === "engenheiro") {
+    if (effectiveRole === "engenheiro") {
       return baseRoleOptions.filter((item) => item.value === "operacional" || item.value === "almoxarife");
     }
     return [];
-  }, [role]);
+  }, [effectiveRole]);
 
   const availableTypeBaseRoles = useMemo(() => {
-    if (role === "master") return baseRoleOptions;
-    if (role === "gestor") return baseRoleOptions.filter((item) => item.value !== "master");
-    if (role === "engenheiro") {
+    if (effectiveRole === "master") return baseRoleOptions;
+    if (effectiveRole === "gestor") return baseRoleOptions.filter((item) => item.value !== "master");
+    if (effectiveRole === "engenheiro") {
       return baseRoleOptions.filter((item) => item.value === "operacional" || item.value === "almoxarife");
     }
     return [];
-  }, [role]);
+  }, [effectiveRole]);
 
   const provisionableObras = useMemo(() => {
-    if (role === "engenheiro") {
+    if (effectiveRole === "engenheiro") {
       const obraSet = new Set(actorObraIds);
       return obras.filter((obra) => obraSet.has(obra.id));
     }
     return obras;
-  }, [actorObraIds, obras, role]);
+  }, [actorObraIds, obras, effectiveRole]);
+
+  const selectedTypePermissionCount = useMemo(
+    () => Object.keys(typePermissions).length,
+    [typePermissions],
+  );
 
   const updateDraft = (userId: string, updater: (current: EditableUser) => EditableUser) => {
     setDrafts((current) => {
@@ -423,6 +618,10 @@ const UsuariosAcessos = () => {
 
   const saveUser = useMutation({
     mutationFn: async (payload: EditableUser) => {
+      if (isViewingAs) {
+        throw new Error("Desative o modo visualizar como perfil para salvar alteracoes.");
+      }
+
       const { error: profileError } = await supabaseAny
         .from("profiles")
         .update({
@@ -543,30 +742,41 @@ const UsuariosAcessos = () => {
   });
 
   const upsertUserType = useMutation({
-    mutationFn: async (payload: TypeForm & { id?: string }) => {
-      const values = {
-        name: payload.name.trim(),
-        description: payload.description.trim() || null,
-        base_role: payload.base_role,
-        is_active: payload.is_active,
-        created_by: user?.id ?? null,
-      };
-
-      if (payload.id) {
-        const { error } = await supabase.from("user_types").update(values).eq("id", payload.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("user_types").insert(values);
-        if (error) throw error;
+    mutationFn: async (payload: TypeForm & { id?: string; permissions: Record<string, TypePermissionScope> }) => {
+      if (isViewingAs) {
+        throw new Error("Desative o modo visualizar como perfil para salvar tipos.");
       }
+
+      if (!tenantId) {
+        throw new Error("Tenant nao identificado para salvar tipo de usuario.");
+      }
+
+      const permissionPayload = Object.entries(payload.permissions).map(([permissionKey, scopeType]) => ({
+        permission_key: permissionKey,
+        scope_type: scopeType,
+      }));
+
+      const { error } = await supabaseAny.rpc("admin_upsert_user_type_with_permissions", {
+        _tenant_id: tenantId,
+        _name: payload.name.trim(),
+        _description: payload.description.trim() || null,
+        _base_role: payload.base_role,
+        _is_active: payload.is_active,
+        _permissions: permissionPayload,
+        _id: payload.id ?? null,
+      });
+
+      if (error) throw error;
     },
     onSuccess: async () => {
       toast.success(editingType ? "Tipo atualizado" : "Tipo criado");
       setTypeDialogOpen(false);
       setEditingType(null);
       setTypeForm(defaultTypeForm);
+      setTypePermissions({});
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin-user-types"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-user-type-permissions"] }),
         queryClient.invalidateQueries({ queryKey: ["admin-users-profiles"] }),
         queryClient.invalidateQueries({ queryKey: ["admin-users-roles"] }),
         queryClient.invalidateQueries({ queryKey: ["admin-audit-log"] }),
@@ -577,6 +787,10 @@ const UsuariosAcessos = () => {
 
   const provisionUser = useMutation({
     mutationFn: async (payload: ProvisionForm) => {
+      if (isViewingAs) {
+        throw new Error("Desative o modo visualizar como perfil para provisionar usuarios.");
+      }
+
       if (!tenantId) {
         throw new Error("Tenant nao identificado para provisionamento.");
       }
@@ -623,19 +837,40 @@ const UsuariosAcessos = () => {
         queryClient.invalidateQueries({ queryKey: ["admin-audit-log"] }),
       ]);
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      const message = String(error.message ?? "");
+      const normalized = message.toLowerCase();
+      if (normalized.includes("master nao pode alterar o proprio tipo de usuario")) {
+        toast.error("Voce nao pode alterar o proprio tipo de usuario master.");
+        return;
+      }
+      if (normalized.includes("conta master protegida")) {
+        toast.error("Conta master protegida. O tipo de usuario nao pode ser alterado.");
+        return;
+      }
+      toast.error(message);
+    },
   });
 
   const openCreateType = () => {
+    const defaultBaseRole = availableTypeBaseRoles[0]?.value ?? "operacional";
     setEditingType(null);
     setTypeForm({
       ...defaultTypeForm,
-      base_role: availableTypeBaseRoles[0]?.value ?? "operacional",
+      base_role: defaultBaseRole,
     });
+    setTypePermissions(buildDefaultTypePermissions(defaultBaseRole));
     setTypeDialogOpen(true);
   };
 
   const openEditType = (type: CompanyUserType) => {
+    const existingPermissions = (userTypePermissionsByTypeId[type.id] ?? []).reduce<
+      Record<string, TypePermissionScope>
+    >((acc, item) => {
+      acc[item.permission_key] = item.scope_type;
+      return acc;
+    }, {});
+
     setEditingType(type);
     setTypeForm({
       name: type.name,
@@ -643,10 +878,20 @@ const UsuariosAcessos = () => {
       base_role: type.base_role,
       is_active: type.is_active,
     });
+    setTypePermissions(
+      Object.keys(existingPermissions).length > 0
+        ? existingPermissions
+        : buildDefaultTypePermissions(type.base_role),
+    );
     setTypeDialogOpen(true);
   };
 
   const saveType = () => {
+    if (isViewingAs) {
+      toast.error("Desative o modo visualizar como perfil para salvar tipos.");
+      return;
+    }
+
     if (!typeForm.name.trim()) {
       toast.error("Nome do tipo e obrigatorio");
       return;
@@ -655,9 +900,14 @@ const UsuariosAcessos = () => {
       toast.error("Papel base nao permitido para seu nivel de acesso.");
       return;
     }
+    if (selectedTypePermissionCount === 0) {
+      toast.error("Selecione ao menos uma permissao para o tipo de usuario.");
+      return;
+    }
 
     upsertUserType.mutate({
       ...typeForm,
+      permissions: typePermissions,
       ...(editingType ? { id: editingType.id } : {}),
     });
   };
@@ -702,9 +952,27 @@ const UsuariosAcessos = () => {
             Usuario master gerencia usuarios, tipos da empresa e vinculos de obra.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {role === "master" && (
+            <Select
+              value={viewAsRole}
+              onValueChange={(value) => setViewAsRole(value as AppRole | "none")}
+            >
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="Visualizar como perfil" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Visualizacao real (sem simulacao)</SelectItem>
+                {baseRoleOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    Visualizar como {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {availableProvisionRoles.length > 0 && (
-            <Button onClick={openProvisionDialog}>
+            <Button onClick={openProvisionDialog} disabled={isViewingAs}>
               <Plus className="mr-1 h-4 w-4" />
               Novo usuario
             </Button>
@@ -712,6 +980,15 @@ const UsuariosAcessos = () => {
           <Badge variant="secondary">{users.length} usuarios</Badge>
         </div>
       </div>
+
+      {isViewingAs && (
+        <Alert className="mb-4">
+          <AlertTitle>Modo visualizar como perfil ativo</AlertTitle>
+          <AlertDescription>
+            Simulacao de permissoes em sessao. Nenhuma troca de papel real e persistida enquanto este modo estiver ativo.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Tabs defaultValue="usuarios" className="space-y-6">
         <TabsList>
@@ -736,6 +1013,9 @@ const UsuariosAcessos = () => {
             users.map((row) => {
               const selectedType = row.user_type_id ? typeById[row.user_type_id] : null;
               const effectiveRole = selectedType?.base_role ?? row.role;
+              const isOwnMasterRow = role === "master" && row.user_id === user?.id;
+              const isProtectedMasterRow = effectiveRole === "master";
+              const disableTypeSelection = isOwnMasterRow || isProtectedMasterRow;
               const grantsByKey = row.grants.reduce<Record<string, EditableUser["grants"][number]>>((acc, item) => {
                 acc[item.permission_key] = item;
                 return acc;
@@ -768,6 +1048,7 @@ const UsuariosAcessos = () => {
                         <Label>Tipo de usuario</Label>
                         <Select
                           value={row.user_type_id ?? "none"}
+                          disabled={disableTypeSelection}
                           onValueChange={(value) =>
                             updateDraft(row.user_id, (current) => ({
                               ...current,
@@ -787,6 +1068,16 @@ const UsuariosAcessos = () => {
                             ))}
                           </SelectContent>
                         </Select>
+                        {isOwnMasterRow && (
+                          <p className="text-xs text-muted-foreground">
+                            Voce nao pode alterar o proprio tipo de usuario master.
+                          </p>
+                        )}
+                        {!isOwnMasterRow && isProtectedMasterRow && (
+                          <p className="text-xs text-muted-foreground">
+                            Conta master protegida: alteracao de tipo bloqueada.
+                          </p>
+                        )}
                       </div>
 
                       <div className="space-y-2">
@@ -944,7 +1235,7 @@ const UsuariosAcessos = () => {
                     )}
 
                     <div className="flex justify-end">
-                      <Button onClick={() => saveUser.mutate(row)} disabled={saveUser.isPending}>
+                      <Button onClick={() => saveUser.mutate(row)} disabled={saveUser.isPending || isViewingAs}>
                         Salvar
                       </Button>
                     </div>
@@ -956,6 +1247,63 @@ const UsuariosAcessos = () => {
 
           <div className="mt-8">
             <h3 className="mb-3 text-lg font-semibold">Log de alteracoes (acesso)</h3>
+            <div className="mb-3 grid gap-2 md:grid-cols-5">
+              <Select value={auditActorFilter} onValueChange={setAuditActorFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Autor" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os autores</SelectItem>
+                  {Object.entries(nameByUserId).map(([userId, name]) => (
+                    <SelectItem key={`audit-actor-${userId}`} value={userId}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={auditTargetFilter} onValueChange={setAuditTargetFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Alvo" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os alvos</SelectItem>
+                  {Object.entries(nameByUserId).map(([userId, name]) => (
+                    <SelectItem key={`audit-target-${userId}`} value={userId}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={auditObraFilter} onValueChange={setAuditObraFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Obra" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as obras</SelectItem>
+                  {obras.map((obra) => (
+                    <SelectItem key={`audit-obra-${obra.id}`} value={obra.id}>
+                      {obra.name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="-">Sem obra</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Input
+                type="date"
+                value={auditStartDate}
+                onChange={(event) => setAuditStartDate(event.target.value)}
+                aria-label="Data inicial do log"
+              />
+              <Input
+                type="date"
+                value={auditEndDate}
+                onChange={(event) => setAuditEndDate(event.target.value)}
+                aria-label="Data final do log"
+              />
+            </div>
             <div className="overflow-x-auto rounded-lg border border-border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
@@ -963,16 +1311,24 @@ const UsuariosAcessos = () => {
                     <th className="px-4 py-3 text-left">Quando</th>
                     <th className="px-4 py-3 text-left">Entidade</th>
                     <th className="px-4 py-3 text-left">Acao</th>
+                    <th className="px-4 py-3 text-left">Obra</th>
                     <th className="px-4 py-3 text-left">Alvo</th>
                     <th className="px-4 py-3 text-left">Autor</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {auditLog.map((entry) => (
-                    <tr key={entry.id} className="border-t border-border">
+                  {filteredAuditLog.map((entry) => (
+                    <tr
+                      key={entry.id}
+                      className="cursor-pointer border-t border-border hover:bg-muted/30"
+                      onClick={() => setSelectedAuditId(entry.id)}
+                    >
                       <td className="px-4 py-3">{new Date(entry.created_at).toLocaleString("pt-BR")}</td>
                       <td className="px-4 py-3">{entry.entity_table}</td>
                       <td className="px-4 py-3">{entry.action}</td>
+                      <td className="px-4 py-3">
+                        {entry.obra_id ? (obraNameById[entry.obra_id] ?? entry.obra_id) : "-"}
+                      </td>
                       <td className="px-4 py-3">
                         {nameByUserId[entry.target_user_id ?? ""] ?? entry.target_user_id ?? "-"}
                       </td>
@@ -981,9 +1337,9 @@ const UsuariosAcessos = () => {
                       </td>
                     </tr>
                   ))}
-                  {auditLog.length === 0 && (
+                  {filteredAuditLog.length === 0 && (
                     <tr>
-                      <td className="px-4 py-3 text-muted-foreground" colSpan={5}>
+                      <td className="px-4 py-3 text-muted-foreground" colSpan={6}>
                         Nenhuma alteracao registrada.
                       </td>
                     </tr>
@@ -991,6 +1347,46 @@ const UsuariosAcessos = () => {
                 </tbody>
               </table>
             </div>
+
+            {selectedAuditEntry && (
+              <div className="mt-4 rounded-lg border border-border p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <h4 className="text-sm font-semibold">Detalhe da alteracao</h4>
+                  <Button variant="outline" size="sm" onClick={() => setSelectedAuditId(null)}>
+                    Fechar
+                  </Button>
+                </div>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  {new Date(selectedAuditEntry.created_at).toLocaleString("pt-BR")} - {selectedAuditEntry.entity_table} - {selectedAuditEntry.action}
+                </p>
+                {selectedAuditDiffRows.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Nao houve mudanca de campos estruturados entre old_data e new_data.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border border-border">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Campo</th>
+                          <th className="px-3 py-2 text-left">Valor anterior</th>
+                          <th className="px-3 py-2 text-left">Valor novo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedAuditDiffRows.map((diff) => (
+                          <tr key={`${selectedAuditEntry.id}-${diff.key}`} className="border-t border-border">
+                            <td className="px-3 py-2 font-medium">{diff.key}</td>
+                            <td className="px-3 py-2">{diff.before}</td>
+                            <td className="px-3 py-2">{diff.after}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </TabsContent>
 
@@ -1009,28 +1405,32 @@ const UsuariosAcessos = () => {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            {userTypes.map((userType) => (
-              <Card key={userType.id}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">{userType.name}</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <p className="text-muted-foreground">{userType.description || "Sem descricao"}</p>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">{roleLabelMap[userType.base_role]}</Badge>
-                    <Badge variant={userType.is_active ? "default" : "outline"}>
-                      {userType.is_active ? "ativo" : "inativo"}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-end">
-                    <Button variant="outline" size="sm" onClick={() => openEditType(userType)}>
-                      <Pencil className="mr-1 h-4 w-4" />
-                      Editar
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+            {userTypes.map((userType) => {
+              const permissionCount = userTypePermissionsByTypeId[userType.id]?.length ?? 0;
+              return (
+                <Card key={userType.id}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">{userType.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm">
+                    <p className="text-muted-foreground">{userType.description || "Sem descricao"}</p>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary">{roleLabelMap[userType.base_role]}</Badge>
+                      <Badge variant={userType.is_active ? "default" : "outline"}>
+                        {userType.is_active ? "ativo" : "inativo"}
+                      </Badge>
+                      <Badge variant="outline">{permissionCount} permissoes</Badge>
+                    </div>
+                    <div className="flex justify-end">
+                      <Button variant="outline" size="sm" onClick={() => openEditType(userType)}>
+                        <Pencil className="mr-1 h-4 w-4" />
+                        Editar
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         </TabsContent>
       </Tabs>
@@ -1062,9 +1462,11 @@ const UsuariosAcessos = () => {
               <Select
                 value={typeForm.base_role}
                 disabled={availableTypeBaseRoles.length === 0}
-                onValueChange={(value) =>
-                  setTypeForm((current) => ({ ...current, base_role: value as AppRole }))
-                }
+                onValueChange={(value) => {
+                  const nextBaseRole = value as AppRole;
+                  setTypeForm((current) => ({ ...current, base_role: nextBaseRole }));
+                  setTypePermissions(buildDefaultTypePermissions(nextBaseRole));
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -1083,6 +1485,78 @@ const UsuariosAcessos = () => {
                 </p>
               )}
             </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Permissoes do tipo *</Label>
+                <Badge variant="secondary">{selectedTypePermissionCount} selecionadas</Badge>
+              </div>
+              <div className="max-h-72 space-y-3 overflow-y-auto rounded-md border border-border p-3">
+                {Object.entries(permissionCatalogByArea).map(([area, permissions]) => (
+                  <div key={area} className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{area}</p>
+                    <div className="space-y-2">
+                      {permissions.map((permission) => {
+                        const checked = !!typePermissions[permission.key];
+                        const selectedScope = typePermissions[permission.key] ?? "tenant";
+                        return (
+                          <div
+                            key={permission.key}
+                            className="rounded-md border border-border p-2"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <label className="flex items-center gap-2">
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(nextChecked) =>
+                                    setTypePermissions((current) => {
+                                      const next = { ...current };
+                                      if (!nextChecked) {
+                                        delete next[permission.key];
+                                        return next;
+                                      }
+                                      next[permission.key] = permission.obra_scoped ? "all_obras" : "tenant";
+                                      return next;
+                                    })
+                                  }
+                                />
+                                <span className="text-sm">{permission.label_pt}</span>
+                              </label>
+                              {checked && permission.obra_scoped && (
+                                <Select
+                                  value={selectedScope}
+                                  onValueChange={(value) =>
+                                    setTypePermissions((current) => ({
+                                      ...current,
+                                      [permission.key]: value as TypePermissionScope,
+                                    }))
+                                  }
+                                >
+                                  <SelectTrigger className="h-8 w-[160px]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all_obras">Todas as obras</SelectItem>
+                                    <SelectItem value="tenant">Tenant inteiro</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {permissionCatalog.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Nenhuma permissao disponivel no catalogo.
+                  </p>
+                )}
+              </div>
+              {selectedTypePermissionCount === 0 && (
+                <p className="text-xs text-destructive">Selecione ao menos uma permissao.</p>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <Switch
                 checked={typeForm.is_active}
@@ -1095,7 +1569,7 @@ const UsuariosAcessos = () => {
             <Button variant="outline" onClick={() => setTypeDialogOpen(false)}>
               Cancelar
             </Button>
-            <Button onClick={saveType} disabled={upsertUserType.isPending}>
+            <Button onClick={saveType} disabled={upsertUserType.isPending || isViewingAs}>
               Salvar
             </Button>
           </DialogFooter>
@@ -1235,7 +1709,7 @@ const UsuariosAcessos = () => {
                   <p className="text-xs text-muted-foreground">Nenhuma obra disponivel para vinculo.</p>
                 )}
               </div>
-              {role === "engenheiro" && (
+              {effectiveRole === "engenheiro" && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Como engenheiro, voce so pode provisionar usuarios nas obras em que ja esta vinculado.
                 </p>
@@ -1261,7 +1735,7 @@ const UsuariosAcessos = () => {
             <Button variant="outline" onClick={() => setProvisionDialogOpen(false)}>
               Cancelar
             </Button>
-            <Button onClick={saveProvision} disabled={provisionUser.isPending || hasProvisionErrors}>
+            <Button onClick={saveProvision} disabled={provisionUser.isPending || hasProvisionErrors || isViewingAs}>
               Criar usuario
             </Button>
           </DialogFooter>

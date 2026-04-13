@@ -33,6 +33,8 @@ interface MaterialFornecedor {
   preco_atual: number;
   pedido_minimo: number;
   lead_time_dias: number;
+  lead_time_real_dias: number;
+  fornecedor_preferencial: boolean;
   validade_preco: string | null;
   ultima_atualizacao: string;
   atualizado_por: string | null;
@@ -46,6 +48,8 @@ interface FormState {
   preco_atual: string;
   pedido_minimo: string;
   lead_time_dias: string;
+  lead_time_real_dias: string;
+  fornecedor_preferencial: boolean;
   validade_preco: string;
 }
 
@@ -55,6 +59,8 @@ const formSchema = z.object({
   preco_atual: z.string().refine((value) => Number(value) > 0, "Preco deve ser maior que zero"),
   pedido_minimo: z.string().optional(),
   lead_time_dias: z.string().optional(),
+  lead_time_real_dias: z.string().optional(),
+  fornecedor_preferencial: z.boolean(),
   validade_preco: z.string().optional(),
 });
 
@@ -64,6 +70,8 @@ const emptyForm: FormState = {
   preco_atual: "",
   pedido_minimo: "",
   lead_time_dias: "",
+  lead_time_real_dias: "",
+  fornecedor_preferencial: false,
   validade_preco: "",
 };
 
@@ -142,6 +150,8 @@ const MaterialFornecedorManager = () => {
         preco_atual: Number(values.preco_atual) || 0,
         pedido_minimo: Number(values.pedido_minimo) || 0,
         lead_time_dias: Number(values.lead_time_dias) || 0,
+        lead_time_real_dias: Number(values.lead_time_real_dias) || 0,
+        fornecedor_preferencial: Boolean(values.fornecedor_preferencial),
         validade_preco: values.validade_preco || null,
         ultima_atualizacao: new Date().toISOString(),
         atualizado_por: user?.id ?? null,
@@ -215,6 +225,8 @@ const MaterialFornecedorManager = () => {
       preco_atual: String(item.preco_atual),
       pedido_minimo: String(item.pedido_minimo),
       lead_time_dias: String(item.lead_time_dias),
+      lead_time_real_dias: String(item.lead_time_real_dias ?? 0),
+      fornecedor_preferencial: item.fornecedor_preferencial ?? false,
       validade_preco: item.validade_preco ?? "",
     });
     setOpen(true);
@@ -287,6 +299,8 @@ const MaterialFornecedorManager = () => {
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Preco Atual</th>
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Pedido Min.</th>
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Lead Time</th>
+                <th className="px-4 py-3 text-right font-medium text-muted-foreground">Lead Time Real</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Preferencial</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Validade</th>
                 {canManage && (
                   <th className="px-4 py-3 text-right font-medium text-muted-foreground">Acoes</th>
@@ -304,6 +318,16 @@ const MaterialFornecedorManager = () => {
                   <td className="px-4 py-3 text-right tabular-nums">{formatCurrency(item.preco_atual)}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{item.pedido_minimo}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{item.lead_time_dias} dias</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{item.lead_time_real_dias ?? 0} dias</td>
+                  <td className="px-4 py-3">
+                    {item.fornecedor_preferencial ? (
+                      <span className="rounded bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-800">
+                        Sim
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Nao</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     {item.validade_preco
                       ? new Date(item.validade_preco).toLocaleDateString("pt-BR")
@@ -416,6 +440,27 @@ const MaterialFornecedorManager = () => {
                   value={form.lead_time_dias}
                   onChange={(event) => setForm({ ...form, lead_time_dias: event.target.value })}
                 />
+              </div>
+              <div>
+                <Label>Lead Time real (dias)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={form.lead_time_real_dias}
+                  onChange={(event) => setForm({ ...form, lead_time_real_dias: event.target.value })}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex items-center gap-2 pt-7">
+                <input
+                  id="fornecedor_preferencial"
+                  type="checkbox"
+                  checked={form.fornecedor_preferencial}
+                  onChange={(event) => setForm({ ...form, fornecedor_preferencial: event.target.checked })}
+                />
+                <Label htmlFor="fornecedor_preferencial">Fornecedor preferencial</Label>
               </div>
               <div>
                 <Label>Validade do Preco</Label>

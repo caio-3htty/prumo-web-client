@@ -22,7 +22,13 @@ import {
 } from "@/lib/userInputValidation";
 
 type AppRole = "master" | "gestor" | "engenheiro" | "operacional" | "almoxarife";
-type CompanySuggestion = { id: string; name: string; slug: string | null };
+type CompanySuggestion = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  slug: string | null;
+  score?: number;
+};
 
 const roleOptions: Array<{ value: AppRole; label: string }> = [
   { value: "master", label: "Master" },
@@ -281,6 +287,12 @@ const Login = () => {
                       Conta interna
                     </Button>
                   </div>
+                  <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground">Fluxos disponiveis</p>
+                    <p>1. Criar empresa nova: use "Conta empresa".</p>
+                    <p>2. Solicitar acesso: use "Conta interna" e selecione a empresa na lista.</p>
+                    <p>3. Entrar por convite: acesse o link recebido por e-mail e conclua o cadastro.</p>
+                  </div>
                 </div>
               )}
 
@@ -337,12 +349,17 @@ const Login = () => {
                               className="block w-full border-b border-border px-3 py-2 text-left text-sm last:border-b-0 hover:bg-accent"
                               onClick={() => {
                                 setCompanyName(company.name);
-                                setTenantId(company.id);
+                                setTenantId(company.tenant_id ?? company.id);
                                 setCompanySuggestions([]);
                               }}
                             >
                               <span className="font-medium">{company.name}</span>
                               {company.slug ? <span className="ml-2 text-xs text-muted-foreground">({company.slug})</span> : null}
+                              {typeof company.score === "number" ? (
+                                <span className="ml-2 text-[10px] text-muted-foreground">
+                                  score {Math.round(company.score * 100)}%
+                                </span>
+                              ) : null}
                             </button>
                           ))}
                         </div>

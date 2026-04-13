@@ -23,7 +23,7 @@ const ObrasManager = () => {
   const { obraId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { role, signOut } = useAuth();
+  const { role, signOut, refreshAccess } = useAuth();
   const isGestor = role === "master" || role === "gestor";
 
   const [open, setOpen] = useState(false);
@@ -58,8 +58,9 @@ const ObrasManager = () => {
         if (error) throw error;
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["obras-all", showTrash] });
+      await refreshAccess();
       toast.success(editing ? "Obra atualizada" : "Obra criada");
       closeDialog();
     },
@@ -74,8 +75,9 @@ const ObrasManager = () => {
         .eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["obras-all", showTrash] });
+      await refreshAccess();
       toast.success("Obra enviada para a lixeira");
     },
     onError: (e) => toast.error(e.message),
@@ -86,8 +88,9 @@ const ObrasManager = () => {
       const { error } = await supabase.from("obras").delete().eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["obras-all", showTrash] });
+      await refreshAccess();
       toast.success("Obra excluída permanentemente");
     },
     onError: (e) => toast.error(e.message),
@@ -98,8 +101,9 @@ const ObrasManager = () => {
       const { error } = await supabase.from("obras").update({ deleted_at: null }).eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["obras-all", showTrash] });
+      await refreshAccess();
       toast.success("Obra restaurada");
     },
     onError: (e) => toast.error(e.message),
@@ -232,3 +236,5 @@ const ObrasManager = () => {
 };
 
 export default ObrasManager;
+
+

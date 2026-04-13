@@ -48,6 +48,9 @@ export const PageShell = ({ title, children }: { title: string; children: React.
         ]
       : []),
     ...(can("users.manage") ? [{ label: "Usuarios e Acessos", path: "/usuarios-acessos" }] : []),
+    ...(can("users.manage") || can("import.manage")
+      ? [{ label: "Importacao", path: "/importacao-lote" }]
+      : []),
   ];
 
   const navItems = inObraRoute ? obraNav : globalNav;

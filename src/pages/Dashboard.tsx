@@ -1,6 +1,19 @@
 import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { BellRing, ChevronLeft, ClipboardList, Layers3, LineChart, LogOut, PackageSearch, RefreshCw, Shuffle, Truck } from "lucide-react";
+import {
+  BellRing,
+  ChevronLeft,
+  ClipboardList,
+  Layers3,
+  LineChart,
+  LogOut,
+  PackageSearch,
+  RefreshCw,
+  Shuffle,
+  Truck,
+} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import logoPrumo from "@/assets/image.png";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -8,13 +21,24 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 import { useI18n } from "@/i18n/useI18n";
 import { canManageCadastros, roleLabelMap } from "@/lib/rbac";
+
+type DashboardPayload = {
+  master_gestor?: Record<string, number>;
+  engenheiro?: Record<string, number>;
+  operacional_almoxarife?: Record<string, number>;
+  series?: {
+    pedidos_por_status?: Array<{ status: string; total: number }>;
+    materiais_risco?: Array<{ material_nome: string; dias_cobertura: number | null; risco: string; recomendacao: string }>;
+  };
+};
 
 const Dashboard = () => {
   const { obraId } = useParams();
   const navigate = useNavigate();
-  const { role, obras, signOut } = useAuth();
+  const { role, obras, signOut, tenantId } = useAuth();
   const { t } = useI18n();
 
   const obra = obras.find((item) => item.id === obraId);
@@ -45,8 +69,44 @@ const Dashboard = () => {
       });
     }
 
+    if (role === "master" || role === "gestor") {
+      base.push({
+        label: "Importacao em lote",
+        icon: PackageSearch,
+        path: "/importacao-lote",
+      });
+    }
+
     return base;
   }, [obraId, role, t]);
+
+  const { data: metrics } = useQuery({
+    queryKey: ["dashboard-metrics", tenantId, obraId],
+    enabled: !!tenantId,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const supabaseAny = supabase as any;
+      const { data, error } = await supabaseAny.rpc("get_dashboard_metrics", {
+        _tenant_id: tenantId,
+        _obra_id: obraId,
+      });
+      if (error) throw error;
+      return (data ?? {}) as DashboardPayload;
+    },
+  });
+
+  const activeKpis = useMemo(() => {
+    if (role === "master" || role === "gestor") {
+      return metrics?.master_gestor ?? {};
+    }
+    if (role === "engenheiro") {
+      return metrics?.engenheiro ?? {};
+    }
+    return metrics?.operacional_almoxarife ?? {};
+  }, [metrics, role]);
+
+  const chartData = metrics?.series?.pedidos_por_status ?? [];
+  const riscoTop = (metrics?.series?.materiais_risco ?? []).slice(0, 8);
 
   return (
     <div className="min-h-screen bg-background">
@@ -80,6 +140,15 @@ const Dashboard = () => {
           <h2 className="mb-1 text-xl font-semibold">{t("dashboardOverviewTitle")}</h2>
           <p className="mb-6 text-muted-foreground">{obra?.address ?? t("dashboardOverviewSubtitle")}</p>
 
+          <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {Object.entries(activeKpis).slice(0, 8).map(([key, value]) => (
+              <div key={key} className="rounded-lg border border-border p-4">
+                <p className="text-xs uppercase text-muted-foreground">{key.replaceAll("_", " ")}</p>
+                <p className="mt-1 text-2xl font-semibold">{Number(value ?? 0)}</p>
+              </div>
+            ))}
+          </div>
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {quickActions.map((action, i) => (
               <Card
@@ -96,6 +165,46 @@ const Dashboard = () => {
                 </CardContent>
               </Card>
             ))}
+          </div>
+
+          <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="rounded-lg border border-border p-4">
+              <p className="mb-3 text-sm font-semibold">Pedidos por status (periodo)</p>
+              {chartData.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Sem dados para o periodo selecionado.</p>
+              ) : (
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="status" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="total" fill="#3b6cae" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-border p-4">
+              <p className="mb-3 text-sm font-semibold">Materiais em risco / recomendacao</p>
+              {riscoTop.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Sem itens em monitoramento para esta obra.</p>
+              ) : (
+                <div className="space-y-2">
+                  {riscoTop.map((item) => (
+                    <div key={`${item.material_nome}-${item.risco}`} className="rounded-md border border-border px-3 py-2 text-sm">
+                      <p className="font-medium">{item.material_nome}</p>
+                      <p className="text-muted-foreground">
+                        Risco: {item.risco} | Cobertura: {item.dias_cobertura ?? "n/a"} dias
+                      </p>
+                      <p>{item.recomendacao}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </main>

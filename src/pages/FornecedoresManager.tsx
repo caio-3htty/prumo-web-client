@@ -27,20 +27,66 @@ interface Fornecedor {
   cnpj: string;
   contatos: string | null;
   entrega_propria: boolean;
+  prazo_prometido_dias: number;
+  prazo_real_medio_dias: number;
+  confiabilidade: number;
   ultima_atualizacao: string;
   atualizado_por: string | null;
   created_at: string;
   deleted_at: string | null;
 }
 
+const CNPJ_DIGITS = 14;
+
+const normalizeCnpj = (value: string) => value.replace(/\D/g, "").slice(0, CNPJ_DIGITS);
+
+const formatCnpj = (value: string) => {
+  const digits = normalizeCnpj(value);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+  if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+  if (digits.length <= 12) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+  }
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
+};
+
+const isValidCnpj = (value: string) => {
+  const digits = normalizeCnpj(value);
+  if (!/^\d{14}$/.test(digits)) return false;
+  if (/^(\d)\1{13}$/.test(digits)) return false;
+
+  const calcDigit = (base: string, size: number) => {
+    let sum = 0;
+    let weight = size - 7;
+
+    for (let i = 0; i < size; i += 1) {
+      sum += Number(base[i]) * weight;
+      weight -= 1;
+      if (weight < 2) weight = 9;
+    }
+
+    const rest = sum % 11;
+    return rest < 2 ? 0 : 11 - rest;
+  };
+
+  const firstDigit = calcDigit(digits, 12);
+  const secondDigit = calcDigit(digits, 13);
+  return firstDigit === Number(digits[12]) && secondDigit === Number(digits[13]);
+};
+
 const formSchema = z.object({
   nome: z.string().min(1, "Nome e obrigatorio"),
   cnpj: z
     .string()
-    .min(1, "CNPJ e obrigatorio")
-    .refine((value) => /^\d{14}$/.test(value.replace(/\D/g, "")), "CNPJ invalido"),
+    .min(CNPJ_DIGITS, "CNPJ deve conter 14 numeros")
+    .refine((value) => /^\d{14}$/.test(value), "CNPJ deve conter apenas numeros")
+    .refine((value) => isValidCnpj(value), "CNPJ invalido"),
   contatos: z.string().optional(),
   entrega_propria: z.boolean(),
+  prazo_prometido_dias: z.string().optional(),
+  prazo_real_medio_dias: z.string().optional(),
+  confiabilidade: z.string().optional(),
 });
 
 const FornecedoresManager = () => {
@@ -50,7 +96,15 @@ const FornecedoresManager = () => {
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Fornecedor | null>(null);
-  const [form, setForm] = useState({ nome: "", cnpj: "", contatos: "", entrega_propria: false });
+  const [form, setForm] = useState({
+    nome: "",
+    cnpj: "",
+    contatos: "",
+    entrega_propria: false,
+    prazo_prometido_dias: "0",
+    prazo_real_medio_dias: "0",
+    confiabilidade: "1",
+  });
   const [showTrash, setShowTrash] = useState(false);
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -75,6 +129,9 @@ const FornecedoresManager = () => {
     mutationFn: async (values: typeof form & { id?: string }) => {
       const payload = {
         ...values,
+        prazo_prometido_dias: Math.max(0, Number(values.prazo_prometido_dias) || 0),
+        prazo_real_medio_dias: Math.max(0, Number(values.prazo_real_medio_dias) || 0),
+        confiabilidade: Math.min(1, Math.max(0, Number(values.confiabilidade) || 0)),
         ultima_atualizacao: new Date().toISOString(),
         atualizado_por: user?.id,
       };
@@ -136,7 +193,15 @@ const FornecedoresManager = () => {
 
   const openNew = () => {
     setEditing(null);
-    setForm({ nome: "", cnpj: "", contatos: "", entrega_propria: false });
+    setForm({
+      nome: "",
+      cnpj: "",
+      contatos: "",
+      entrega_propria: false,
+      prazo_prometido_dias: "0",
+      prazo_real_medio_dias: "0",
+      confiabilidade: "1",
+    });
     setOpen(true);
   };
 
@@ -144,9 +209,12 @@ const FornecedoresManager = () => {
     setEditing(fornecedor);
     setForm({
       nome: fornecedor.nome,
-      cnpj: fornecedor.cnpj,
+      cnpj: normalizeCnpj(fornecedor.cnpj),
       contatos: fornecedor.contatos ?? "",
       entrega_propria: fornecedor.entrega_propria,
+      prazo_prometido_dias: String(fornecedor.prazo_prometido_dias ?? 0),
+      prazo_real_medio_dias: String(fornecedor.prazo_real_medio_dias ?? 0),
+      confiabilidade: String(fornecedor.confiabilidade ?? 1),
     });
     setOpen(true);
   };
@@ -157,34 +225,56 @@ const FornecedoresManager = () => {
   };
 
   const handleSubmit = async () => {
-    const parsed = formSchema.safeParse(form);
+    const normalizedForm = {
+      ...form,
+      cnpj: normalizeCnpj(form.cnpj),
+    };
+
+    const parsed = formSchema.safeParse(normalizedForm);
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? "Dados invalidos");
       return;
     }
 
-    if (!editing) {
-      const { data: existing, error } = await supabase
-        .from("fornecedores")
-        .select("id")
-        .eq("cnpj", form.cnpj)
-        .limit(1);
-      if (error) {
-        toast.error(error.message);
-        return;
-      }
-      if (existing && existing.length > 0) {
-        toast.error("CNPJ ja cadastrado");
-        return;
-      }
+    const confiabilidade = Number(normalizedForm.confiabilidade);
+    if (!Number.isFinite(confiabilidade) || confiabilidade < 0 || confiabilidade > 1) {
+      toast.error("Confiabilidade deve ficar entre 0 e 1.");
+      return;
     }
 
-    upsert.mutate(editing ? { ...form, id: editing.id } : form);
+    const cnpjCandidates = Array.from(
+      new Set([normalizedForm.cnpj, formatCnpj(normalizedForm.cnpj)].filter(Boolean)),
+    );
+    let duplicateQuery = supabase
+      .from("fornecedores")
+      .select("id")
+      .in("cnpj", cnpjCandidates)
+      .limit(1);
+
+    if (editing) {
+      duplicateQuery = duplicateQuery.neq("id", editing.id);
+    }
+
+    const { data: existing, error } = await duplicateQuery;
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    if (existing && existing.length > 0) {
+      toast.error("CNPJ ja cadastrado");
+      return;
+    }
+
+    upsert.mutate(editing ? { ...normalizedForm, id: editing.id } : normalizedForm);
   };
 
   const columns = [
     { key: "nome", label: "Nome" },
-    { key: "cnpj", label: "CNPJ" },
+    {
+      key: "cnpj",
+      label: "CNPJ",
+      render: (item: Fornecedor) => formatCnpj(item.cnpj),
+    },
     { key: "contatos", label: "Contatos" },
     ...(showTrash
       ? [
@@ -205,6 +295,21 @@ const FornecedoresManager = () => {
         ) : (
           <X className="h-4 w-4 text-muted-foreground" />
         ),
+    },
+    {
+      key: "prazo_prometido_dias",
+      label: "Prazo prometido",
+      render: (item: Fornecedor) => `${item.prazo_prometido_dias ?? 0} dias`,
+    },
+    {
+      key: "prazo_real_medio_dias",
+      label: "Prazo real",
+      render: (item: Fornecedor) => `${item.prazo_real_medio_dias ?? 0} dias`,
+    },
+    {
+      key: "confiabilidade",
+      label: "Confiabilidade",
+      render: (item: Fornecedor) => `${Math.round((item.confiabilidade ?? 0) * 100)}%`,
     },
     ...(canManage
       ? [
@@ -289,9 +394,11 @@ const FornecedoresManager = () => {
             <div>
               <Label>CNPJ *</Label>
               <Input
-                value={form.cnpj}
-                onChange={(event) => setForm({ ...form, cnpj: event.target.value })}
+                value={formatCnpj(form.cnpj)}
+                onChange={(event) => setForm({ ...form, cnpj: normalizeCnpj(event.target.value) })}
                 placeholder="00.000.000/0000-00"
+                inputMode="numeric"
+                autoComplete="off"
               />
             </div>
             <div>
@@ -301,6 +408,42 @@ const FornecedoresManager = () => {
                 onChange={(event) => setForm({ ...form, contatos: event.target.value })}
                 placeholder="Email, telefone..."
               />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <Label>Prazo prometido (dias)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={form.prazo_prometido_dias}
+                  onChange={(event) =>
+                    setForm({ ...form, prazo_prometido_dias: event.target.value })
+                  }
+                />
+              </div>
+              <div>
+                <Label>Prazo real medio (dias)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={form.prazo_real_medio_dias}
+                  onChange={(event) =>
+                    setForm({ ...form, prazo_real_medio_dias: event.target.value })
+                  }
+                />
+              </div>
+              <div>
+                <Label>Confiabilidade (0 a 1)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step="0.01"
+                  value={form.confiabilidade}
+                  onChange={(event) => setForm({ ...form, confiabilidade: event.target.value })}
+                />
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <Switch
